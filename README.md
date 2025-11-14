@@ -6,7 +6,10 @@ My journey of scouring the depths of the internet to learn and build my very own
 1. [Project Overview](#project-overview)
 2. [System Architecture](#system-architecture)
 3. [Detailed Component Breakdown](#detailed-component-breakdown)
-   - [Bootloader (boot.asm)](#bootloader-bootasm)
+   - [Stage 1 Bootloader (boot.asm)](#stage-1-bootloader-bootasm)
+   - [Stage 2 Bootloader (main.asm + main.c)](#stage-2-bootloader-mainasm--mainc)
+   - [C Standard Library Components](#c-standard-library-components)
+   - [x86 Assembly Helpers](#x86-assembly-helpers)
    - [Kernel (main.asm)](#kernel-mainasm)
    - [FAT12 Utility (fat.c)](#fat12-utility-fatc)
    - [Build System (Makefile)](#build-system-makefile)
@@ -18,14 +21,26 @@ My journey of scouring the depths of the internet to learn and build my very own
 
 ## Project Overview
 
-This is a custom operating system built from scratch that demonstrates the fundamental concepts of OS development. The project includes:
+This is a custom operating system built from scratch that demonstrates fundamental OS development concepts. The project has evolved to include:
 
-- **A custom bootloader** written in x86 assembly that loads the OS kernel from a FAT12 filesystem
+- **A two-stage bootloader architecture** - Stage 1 loads Stage 2, enabling more sophisticated boot logic
+- **Stage 2 bootloader written in mixed Assembly and C** - Combines low-level hardware control with high-level logic
+- **Open Watcom C compiler integration** - Allows writing bootloader code in C with 16-bit real mode support
+- **Custom x86 assembly routines** - BIOS interrupt wrappers callable from C
 - **A simple kernel** that displays a message when loaded
 - **A FAT12 filesystem utility** for reading files from the disk image
-- **A complete build system** that creates a bootable floppy disk image
+- **A modular build system** with separate Makefiles for each component
 
 The OS is designed to run on x86 architecture (16-bit real mode) and can be executed in emulators like QEMU or on real hardware.
+
+### Why Two-Stage Bootloader?
+
+The BIOS boot sector is limited to 512 bytes, which is insufficient for complex bootloader logic. A two-stage design solves this:
+
+1. **Stage 1 (512 bytes)**: Minimal assembly code that understands FAT12 and loads Stage 2
+2. **Stage 2 (unlimited size)**: Full-featured bootloader written in C that can perform complex initialization, display messages, load drivers, etc.
+
+This architecture is used by real-world bootloaders like GRUB and Windows Boot Manager.
 
 ---
 
@@ -33,30 +48,500 @@ The OS is designed to run on x86 architecture (16-bit real mode) and can be exec
 
 ### Boot Process Flow
 
-```
-Power On → BIOS → Bootloader (512 bytes) → Kernel → OS Running
+```text
+Power On → BIOS → Stage 1 Bootloader (512 bytes) → Stage 2 Bootloader (C + ASM) → Kernel → OS Running
 ```
 
 1. **BIOS Stage**: When the computer starts, the BIOS loads the first sector (512 bytes) of the boot disk into memory at address `0x7C00` and executes it
-2. **Bootloader Stage**: The bootloader initializes hardware, reads the FAT12 filesystem, locates the kernel file, loads it into memory, and transfers control to it
-3. **Kernel Stage**: The kernel takes over and runs the operating system
+2. **Stage 1 Bootloader**: Minimal assembly code that initializes hardware, reads the FAT12 filesystem, locates `STAGE2.BIN`, loads it into memory at `0x0500`, and transfers control to it
+3. **Stage 2 Bootloader**: More sophisticated bootloader written in mixed C and assembly that can perform complex initialization, display messages, and prepare the system for the kernel
+4. **Kernel Stage**: The kernel takes over and runs the operating system
 
 ### Memory Layout
 
-```
+```text
 0x0000:0x0000 - Interrupt Vector Table
-0x0000:0x7C00 - Bootloader loaded here (512 bytes)
+0x0000:0x0500 - Stage 2 bootloader loaded here
+0x0000:0x7C00 - Stage 1 bootloader loaded here (512 bytes)
 0x0000:0x7E00 - Buffer for disk operations
-0x2000:0x0000 - Kernel loaded here
+0x2000:0x0000 - Kernel loaded here (future)
 ```
+
+### Key Advantages of Two-Stage Design
+
+- **More Space**: Stage 2 can be any size, not limited to 512 bytes
+- **High-Level Language**: Stage 2 can be written in C for better maintainability
+- **Error Handling**: Room for detailed error messages and diagnostics
+- **Modularity**: Can load multiple components (drivers, config files, etc.)
+- **Flexibility**: Easy to add features without fighting size constraints
 
 ---
 
 ## Detailed Component Breakdown
 
-### Bootloader (boot.asm)
+### Stage 1 Bootloader (boot.asm)
 
-The bootloader is the first piece of code that runs when the system starts. It's limited to exactly 512 bytes (one sector) and must end with the boot signature `0xAA55`.
+Stage 1 is the 512-byte bootloader that the BIOS loads first. Its sole job is to load Stage 2 from the FAT12 filesystem.
+
+**Key responsibilities:**
+- Initialize segment registers and stack
+- Detect disk geometry using BIOS
+- Read and parse FAT12 filesystem structures
+- Search for `STAGE2.BIN` in the root directory
+- Load Stage 2 into memory at `0x0500`
+- Transfer control to Stage 2
+
+The implementation is nearly identical to the full bootloader from the previous version, except:
+- Searches for `"STAGE2  BIN"` instead of `"KERNEL  BIN"`
+- Loads to memory address `0x0500` instead of `0x2000`
+- Uses constants `STAGE2_LOAD_SEGMENT = 0x0` and `STAGE2_LOAD_OFFSET = 0x500`
+
+**Why load at 0x0500?**
+- Address `0x0500-0x7BFF` is guaranteed free memory (BIOS Data Area ends at 0x500)
+- Avoids conflicts with the Stage 1 bootloader at 0x7C00
+- Provides ~30 KB of space for Stage 2 code
+- Standard location used by many bootloaders
+
+See the [original bootloader documentation](#bootloader-deep-dive-legacy) below for detailed explanation of FAT12 reading, LBA to CHS conversion, and disk I/O routines.
+
+---
+
+### Stage 2 Bootloader (main.asm + main.c)
+
+Stage 2 is a sophisticated bootloader written in mixed assembly and C, compiled with Open Watcom's 16-bit compiler.
+
+#### Architecture Overview
+
+**Linker Memory Map** (`stage2.map`):
+```text
+Segment                Address    Size
+=======                =======    ====
+_ENTRY (assembly)      0x0000     0x0013  (19 bytes)
+_TEXT (C code)         0x0013     0x000F  (15 bytes)
+CONST (constants)      0x0022     0x0000
+_DATA (variables)      0x0022     0x0000
+
+Entry point: 0x0000 (first byte of stage2.bin)
+```
+
+The linker creates a raw binary where execution starts at byte 0, allowing Stage 1 to jump directly to the beginning of Stage 2.
+
+#### main.asm - Assembly Entry Point
+
+```assembly
+bits 16
+section _ENTRY class=CODE
+
+extern _cstart_
+global entry
+
+entry:
+    cli                    ; Disable interrupts during setup
+    
+    ; Setup segments
+    mov ax, ds
+    mov ss, ax
+    xor sp, sp            ; SP = 0
+    
+    mov ax, _TEXT
+    mov ds, ax
+    
+    sti                   ; Re-enable interrupts
+    
+    call _cstart_         ; Call C entry point
+    
+    cli
+    hlt
+```
+
+**Key features:**
+- **Segment initialization**: Sets up segment registers for C code execution
+- **Stack setup**: Establishes a stack for C function calls
+- **C function call**: Jumps to `_cstart_()` in main.c
+- **Halt on return**: If C code returns, halt the system
+
+**Open Watcom calling convention:**
+- C functions are prefixed with underscore (`cstart_` becomes `_cstart_`)
+- Parameters passed on stack (right-to-left)
+- Caller cleans up stack
+- Return value in AX register
+
+#### main.c - C Entry Point
+
+```c
+#include "stdint.h"
+#include "stdio.h"
+
+void _cdecl cstart_(uint16_t bootDrive)
+{
+    puts("Hello world from C!_");
+}
+```
+
+**Compiler**: Open Watcom C Compiler (wcc)
+- **Target**: 16-bit real mode (80186/80286 compatible)
+- **Memory model**: Small model (`-ms`)
+  - Code and data fit in 64 KB
+  - Near pointers only (16-bit offsets)
+  - Fast and efficient for small programs
+- **Calling convention**: `_cdecl` - C declaration, parameters on stack
+- **No standard library**: `-zl` flag disables linking with standard library
+- **Optimizations**: `-s` removes stack overflow checks, `-zq` quiet mode
+
+**Compilation command:**
+```bash
+wcc -4 -d3 -s -wx -ms -zl -zq -fo=output.obj main.c
+```
+
+Flags explained:
+- `-4`: Generate 80386 instructions (backwards compatible)
+- `-d3`: Full debugging information
+- `-s`: Remove stack overflow checking (saves space)
+- `-wx`: Maximum warning level
+- `-ms`: Small memory model
+- `-zl`: No default library searching
+- `-zq`: Quiet operation
+
+#### Linking Stage 2
+
+**Linker**: Open Watcom Linker (wlink)
+
+```bash
+wlink NAME stage2.bin \
+      FILE { main_asm.obj main_c.obj x86.obj stdio.obj } \
+      OPTION MAP=stage2.map \
+      @linker.lnk
+```
+
+**linker.lnk configuration:**
+```text
+OPTION NODEFAULTLIBS
+OPTION NOINIT
+ORDER
+    CLNAME CODE SEGMENT _ENTRY
+    CLNAME CODE SEGMENT _TEXT
+    CLNAME DATA SEGMENT CONST
+    CLNAME DATA SEGMENT CONST2
+    CLNAME DATA SEGMENT _DATA
+OPTION OFFSET=0
+OPTION START=entry
+FORMAT RAW BIN
+```
+
+**Configuration details:**
+
+- **`NODEFAULTLIBS`**: Don't link with C runtime library
+- **`NOINIT`**: Don't generate C runtime initialization code
+- **`ORDER`**: Specifies segment order in the output binary
+  - `_ENTRY` first (assembly entry point)
+  - `_TEXT` second (C code)
+  - Data segments after code
+- **`OFFSET=0`**: Start addresses at 0 (Stage 1 sets segment registers)
+- **`START=entry`**: Entry point is the `entry` symbol in main.asm
+- **`FORMAT RAW BIN`**: Output raw binary, not ELF/COFF executable
+
+**Why this order matters:**
+- Stage 1 jumps to byte 0 of Stage 2
+- Byte 0 must be executable code (the `entry:` label)
+- C code follows assembly entry point
+- Data sections come after all code
+
+**Warning: "stack segment not found"**
+- Expected for raw binaries
+- We manually set SS:SP in assembly
+- Safe to ignore
+
+---
+
+### C Standard Library Components
+
+Since we're in a bare-metal environment, we must implement our own I/O functions.
+
+#### stdint.h - Standard Integer Types
+
+```c
+#pragma once
+
+typedef signed char int8_t;
+typedef unsigned char uint8_t;
+typedef signed short int16_t;
+typedef unsigned short uint16_t;
+typedef signed long int32_t;
+typedef unsigned long uint32_t;
+typedef signed long long int64_t;
+typedef unsigned long long uint64_t;
+```
+
+**Purpose**: Provides fixed-width integer types for precise memory layout and hardware interaction.
+
+**Open Watcom specifics:**
+- `char` = 8 bits
+- `short` = 16 bits  
+- `long` = 32 bits
+- `long long` = 64 bits
+- `int` = 16 bits (in 16-bit mode)
+
+#### stdio.h - Standard Input/Output
+
+```c
+#pragma once
+
+void putc(char c);
+void puts(const char* str);
+```
+
+Simple interface for character and string output using BIOS interrupts.
+
+#### stdio.c - Implementation
+
+```c
+#include "stdio.h"
+#include "x86.h"
+
+void putc(char c)
+{
+    x86_Video_WriteCharTeletype(c, 0);
+}
+
+void puts(const char* str)
+{
+    while (*str)
+    {
+        putc(*str);
+        str++;
+    }
+}
+```
+
+**How it works:**
+- `putc()`: Outputs single character by calling assembly wrapper
+- `puts()`: Iterates through null-terminated string, calling `putc()` for each character
+- No buffering (writes directly to screen via BIOS)
+- No newline handling (must include `\n` explicitly)
+
+---
+
+### x86 Assembly Helpers
+
+To call BIOS interrupts from C, we need assembly wrappers that follow C calling conventions.
+
+#### x86.h - Function Declarations
+
+```c
+#pragma once
+
+#include "stdint.h"
+
+void _cdecl x86_Video_WriteCharTeletype(char c, uint8_t page);
+```
+
+**`_cdecl` attribute**: Tells compiler to use C calling convention (caller cleans stack).
+
+#### x86.asm - Assembly Implementation
+
+```assembly
+bits 16
+
+section _TEXT class=CODE
+
+global _x86_Video_WriteCharTeletype
+_x86_Video_WriteCharTeletype:
+    push bp
+    mov bp, sp        ; Setup stack frame
+    
+    push bx           ; Save BX (BIOS may modify it)
+    
+    ; Get parameters from stack
+    mov ah, 0Eh       ; BIOS function: teletype output
+    mov al, [bp + 4]  ; Parameter 1: character (at BP+4)
+    mov bh, [bp + 6]  ; Parameter 2: page number (at BP+6)
+    
+    int 10h           ; BIOS video interrupt
+    
+    pop bx            ; Restore BX
+    
+    mov sp, bp
+    pop bp
+    ret               ; Caller cleans up parameters
+```
+
+**Open Watcom stack frame (16-bit, small model):**
+
+```text
+[BP + 6]  - Parameter 2 (page)
+[BP + 4]  - Parameter 1 (character)
+[BP + 2]  - Return address (offset)
+[BP + 0]  - Saved BP
+[BP - 2]  - Local variables (if any)
+```
+
+**Why this layout?**
+- Parameters pushed right-to-left
+- Return address pushed by CALL instruction
+- BP pushed to preserve caller's stack frame
+- Parameters accessed via positive offsets from BP
+
+**BIOS INT 10h, AH=0Eh - Teletype Output:**
+- **Input:**
+  - AH = 0x0E (function number)
+  - AL = Character to display
+  - BH = Page number (usually 0)
+  - BL = Foreground color (in graphics modes)
+- **Effect:**
+  - Displays character at cursor position
+  - Advances cursor
+  - Handles special characters (\n, \r, \b, \a)
+  - Scrolls screen if needed
+
+**Why save/restore BX?**
+- BIOS may modify registers
+- C calling convention requires preserving BX, SI, DI, BP
+- AX, CX, DX are scratch registers (caller saves if needed)
+
+---
+
+### Kernel (main.asm)
+
+The kernel is currently a simple demonstration that prints a message. In the future, this will be replaced with a full-featured operating system kernel.
+
+**Current implementation:**
+
+```assembly
+org 0x0
+bits 16
+
+start:
+    mov ax, 0x2000     ; Segment where kernel would be loaded
+    mov ds, ax
+    mov es, ax
+    
+    mov si, msg_hello
+    call puts
+    
+.halt:
+    cli                ; Disable interrupts
+    hlt                ; Halt CPU
+```
+
+The kernel would be loaded by Stage 2 (not yet implemented) at memory address `0x2000:0x0000`.
+
+---
+
+### Build System Components
+
+The project uses a modular build system with separate Makefiles for each component.
+
+#### Main Makefile Structure
+
+**Variables:**
+```makefile
+ASM=nasm                 # Netwide Assembler
+CC=gcc                   # GNU C Compiler (for tools)
+CC16=wcc                 # Open Watcom C Compiler (for 16-bit code)
+LD16=wlink               # Open Watcom Linker
+SRC_DIR=src
+TOOLS_DIR=tools
+BUILD_DIR=build
+```
+
+**Build targets:**
+
+1. **Stage 1 Bootloader**
+   ```makefile
+   $(BUILD_DIR)/stage1.bin: src/bootloader/stage1/boot.asm
+       nasm boot.asm -f bin -o $(BUILD_DIR)/stage1.bin
+   ```
+   Assembles Stage 1 to raw binary.
+
+2. **Stage 2 Bootloader**
+   ```makefile
+   $(BUILD_DIR)/stage2.bin: main.asm main.c stdio.c x86.asm
+       nasm -f obj -o main.obj main.asm
+       nasm -f obj -o x86.obj x86.asm
+       wcc -4 -d3 -s -wx -ms -zl -zq -fo=main_c.obj main.c
+       wcc -4 -d3 -s -wx -ms -zl -zq -fo=stdio.obj stdio.c
+       wlink NAME stage2.bin FILE { main.obj x86.obj main_c.obj stdio.obj } @linker.lnk
+   ```
+   
+   **Process:**
+   - Assemble .asm files to OBJ format (not raw binary)
+   - Compile .c files to OBJ format
+   - Link all OBJ files together with custom linker script
+   - Output raw binary with entry point at byte 0
+
+3. **Floppy Image Creation**
+   ```makefile
+   $(BUILD_DIR)/main_floppy.img: stage1 stage2
+       dd if=/dev/zero of=$@ bs=512 count=2880
+       mkfs.fat -F 12 -n "NBOS" $@
+       dd if=$(BUILD_DIR)/stage1.bin of=$@ conv=notrunc
+       mcopy -i $@ $(BUILD_DIR)/stage2.bin "::/stage2.bin"
+       mcopy -i $@ test.txt "::/test.txt"
+   ```
+   
+   **Steps:**
+   - Create blank 1.44 MB image
+   - Format as FAT12 filesystem
+   - Overwrite boot sector with Stage 1
+   - Copy Stage 2 and test files into filesystem
+
+#### Sub-Makefiles
+
+**stage1/Makefile:**
+```makefile
+BUILD_DIR ?= $(abspath build)
+
+.PHONY: all clean
+
+all: $(BUILD_DIR)/stage1.bin
+
+$(BUILD_DIR)/stage1.bin: boot.asm
+	nasm boot.asm -f bin -o $@
+
+clean:
+	rm -f $(BUILD_DIR)/stage1.bin
+```
+
+**stage2/Makefile:**
+```makefile
+BUILD_DIR ?= $(abspath build)
+
+ASM=nasm
+CC16=wcc
+LD16=wlink
+
+SOURCES_ASM=$(wildcard *.asm)
+SOURCES_C=$(wildcard *.c)
+
+OBJECTS_ASM=$(patsubst %.asm, $(BUILD_DIR)/stage2/asm/%.obj, $(SOURCES_ASM))
+OBJECTS_C=$(patsubst %.c, $(BUILD_DIR)/stage2/c/%.obj, $(SOURCES_C))
+
+.PHONY: all clean
+
+all: $(BUILD_DIR)/stage2.bin
+
+$(BUILD_DIR)/stage2.bin: $(OBJECTS_ASM) $(OBJECTS_C)
+	$(LD16) NAME $@ FILE { $(OBJECTS_ASM) $(OBJECTS_C) } OPTION MAP=$(BUILD_DIR)/stage2.map @linker.lnk
+
+$(BUILD_DIR)/stage2/asm/%.obj: %.asm
+	mkdir -p $(BUILD_DIR)/stage2/asm
+	$(ASM) -f obj -o $@ $<
+
+$(BUILD_DIR)/stage2/c/%.obj: %.c
+	mkdir -p $(BUILD_DIR)/stage2/c
+	$(CC16) -4 -d3 -s -wx -ms -zl -zq -fo=$@ $<
+
+clean:
+	rm -f $(BUILD_DIR)/stage2.bin
+```
+
+**Key features:**
+- **Automatic dependency tracking**: Wildcard patterns find all .asm and .c files
+- **Separate object directories**: Assembly and C objects stored separately
+- **Pattern rules**: Generic rules for compiling any .c or .asm file
+- **BUILD_DIR parameter**: Parent Makefile can override build location
+
+---
 
 #### **1. Initial Setup and FAT12 Header (Lines 1-36)**
 
@@ -952,70 +1437,218 @@ Removes all build artifacts.
 
 ## How Everything Works Together
 
-### Complete Boot Sequence
+### Complete Boot Sequence (Two-Stage Architecture)
 
 1. **Power On**
    - BIOS performs POST (Power-On Self Test)
    - BIOS identifies bootable drives
+   - BIOS loads first sector (512 bytes) from boot disk to `0x7C00`
+   - BIOS verifies boot signature (0xAA55)
+   - BIOS jumps to `0x7C00`
 
-2. **BIOS Loads Bootloader**
-   - BIOS reads first sector (512 bytes) from boot disk
-   - Loads it to memory address 0x7C00
-   - Verifies boot signature (0xAA55)
-   - Jumps to 0x7C00
+2. **Stage 1 Bootloader Execution**
+   - **Initialize hardware** (Lines 38-51)
+     - Set DS, ES, SS, CS all to 0 for linear addressing
+     - Set stack pointer to `0x7C00` (grows downward)
+   - **Detect disk geometry** (Lines 54-72)
+     - BIOS INT 13h, AH=08h to get sectors/track and heads
+     - Saves geometry for LBA→CHS conversion
+   - **Read FAT12 structures** (Lines 74-95)
+     - Calculate root directory location (sector 19)
+     - Calculate root directory size (14 sectors)
+     - Load root directory to buffer at `0x7E00`
+   - **Search for Stage 2** (Lines 98-114)
+     - Linear search through 224 directory entries
+     - Look for filename `"STAGE2  BIN"` (11 characters, space-padded)
+     - If not found, display error and reboot
+   - **Load File Allocation Table** (Lines 116-125)
+     - FAT starts at sector 1, is 9 sectors long
+     - Load entire FAT to memory buffer
+   - **Load Stage 2 into memory** (Lines 127-174)
+     - Get first cluster from directory entry (offset +26)
+     - Loop: Read cluster, follow FAT chain, repeat until EOF (0xFF8)
+     - Load to memory at `0x0000:0x0500`
+   - **Transfer control to Stage 2** (Lines 168-174)
+     - Pass boot drive number in DL
+     - Far jump to `0x0000:0x0500`
 
-3. **Bootloader Execution**
-   - Initializes segment registers (DS, ES, SS, CS all to 0)
-   - Sets up stack at 0x7C00
-   - Detects disk geometry using BIOS
-   - Calculates and reads root directory
-   - Searches for "KERNEL  BIN" file
-   - Reads File Allocation Table
-   - Follows FAT chain to load all kernel clusters
-   - Loads kernel to memory at 0x2000:0x0000
-   - Jumps to kernel
+3. **Stage 2 Bootloader Execution**
+   - **Assembly entry point** (`main.asm`)
+     - Disable interrupts during initialization
+     - Setup segments (DS, SS)
+     - Setup stack (SP = 0)
+     - Enable interrupts
+     - Call C entry point `_cstart_()`
+   - **C code execution** (`main.c`)
+     - Receives boot drive number as parameter
+     - Calls `puts("Hello world from C!_")`
+     - `puts()` calls `putc()` for each character
+     - `putc()` calls assembly wrapper `x86_Video_WriteCharTeletype()`
+     - Assembly wrapper invokes BIOS INT 10h to display characters
+   - **Screen output visible in QEMU**
+     - Message displayed via BIOS teletype function
+     - Cursor advances automatically
+   - **Return and halt**
+     - If C code returns, assembly entry point halts CPU
 
-4. **Kernel Execution**
-   - Sets up its own segment registers
-   - Prints "Hello world from kernel!"
-   - Halts CPU
+4. **Future: Kernel Execution** (not yet implemented)
+   - Stage 2 would load `KERNEL.BIN` from FAT12
+   - Transfer control to kernel at `0x2000:0x0000`
+   - Kernel initializes hardware, memory management, etc.
 
 ### Memory Map During Execution
 
-```
-0x0000:0x0000 - 0x0000:0x03FF   Interrupt Vector Table (1 KB)
-0x0000:0x0400 - 0x0000:0x04FF   BIOS Data Area (256 bytes)
-0x0000:0x0500 - 0x0000:0x7BFF   Free conventional memory (~30 KB)
-0x0000:0x7C00 - 0x0000:0x7DFF   Bootloader (512 bytes)
-0x0000:0x7E00 - 0x0000:0xFFFF   Buffer and stack (~32.5 KB)
-0x1000:0x0000 - 0x1FFF:0xFFFF   Free memory (~64 KB)
-0x2000:0x0000 - 0x2FFF:0xFFFF   Kernel (up to 64 KB)
-0x3000:0x0000 - 0x9FFF:0xFFFF   Free memory (~896 KB)
-0xA000:0x0000 - 0xFFFF:0xFFFF   Video memory, BIOS ROM, etc.
-```
-
-### File System Structure
-
-The 1.44MB floppy disk image layout:
-
-```
-Sector 0:       Boot sector (bootloader code + FAT12 BPB)
-Sectors 1-9:    First FAT copy
-Sectors 10-18:  Second FAT copy (redundancy)
-Sectors 19-32:  Root directory (224 entries max)
-Sectors 33+:    Data area (clusters start here)
+```text
+Address Range                      Contents                                  Size
+====================================================================================
+0x0000:0x0000 - 0x0000:0x03FF     Interrupt Vector Table                    1 KB
+0x0000:0x0400 - 0x0000:0x04FF     BIOS Data Area                            256 bytes
+0x0000:0x0500 - 0x0000:0x7BFF     Stage 2 Bootloader (loaded here)          ~29.5 KB
+0x0000:0x7C00 - 0x0000:0x7DFF     Stage 1 Bootloader (BIOS loads here)      512 bytes
+0x0000:0x7E00 - 0x0000:0xFFFF     FAT buffer, stack, free memory            ~32.5 KB
+0x1000:0x0000 - 0x1FFF:0xFFFF     Free conventional memory                  ~64 KB
+0x2000:0x0000 - 0x2FFF:0xFFFF     Kernel (future)                           up to 64 KB
+0x3000:0x0000 - 0x9FFF:0xFFFF     Free conventional memory                  ~896 KB
+0xA000:0x0000 - 0xBFFF:0xFFFF     Video memory (text mode @ B8000)          128 KB
+0xC000:0x0000 - 0xFFFF:0xFFFF     BIOS ROM, hardware mappings               256 KB
 ```
 
-### FAT12 File Allocation
+**Key memory regions:**
+- **IVT (0x0000-0x03FF)**: 256 interrupt vector entries (4 bytes each)
+- **BDA (0x0400-0x04FF)**: BIOS data (detected hardware, keyboard buffer, etc.)
+- **Free (0x0500-0x7BFF)**: Safe to use; Stage 2 loaded here
+- **Stage 1 (0x7C00-0x7DFF)**: Still in memory but can be overwritten after Stage 2 loads
+- **Buffer (0x7E00+)**: Used by Stage 1 for disk reads; available after loading
+- **Video (0xB8000)**: Text mode video memory (80x25 characters, 2 bytes each)
 
-Example: kernel.bin is 3 sectors (1536 bytes)
+### Stack Usage
 
-1. Root directory entry points to first cluster (e.g., cluster 2)
-2. FAT entry for cluster 2 points to cluster 3
-3. FAT entry for cluster 3 points to cluster 4
-4. FAT entry for cluster 4 contains 0xFFF (end of file)
+**Stage 1 stack:**
+- Starts at `0x7C00`, grows downward toward `0x7E00` buffer
+- Small stack usage (< 100 bytes typically)
+- Used for function calls and local variables
 
-The bootloader follows this chain to load all parts of the kernel.
+**Stage 2 stack:**
+- Starts at `0x0000` (SP=0), grows downward
+- Wraps around to high memory (0xFFFF)
+- C code requires more stack space for local variables
+- ~64 KB available before hitting Stage 1 at 0x7C00
+
+### Disk Image Structure
+
+**1.44 MB Floppy Disk Layout:**
+
+```text
+Sector Range    Component                   Size        Purpose
+==================================================================================
+0               Boot Sector                 512 bytes   Stage 1 bootloader + BPB
+1-9             FAT #1                      4608 bytes  File Allocation Table (primary)
+10-18           FAT #2                      4608 bytes  File Allocation Table (backup)
+19-32           Root Directory              7168 bytes  Up to 224 file entries
+33-2879         Data Area                   1.4 MB      File contents (clusters)
+```
+
+**FAT12 Calculations:**
+- **Total sectors**: 2880 (1,474,560 bytes = 1.44 MB)
+- **Root directory entries**: 224 entries × 32 bytes = 7168 bytes = 14 sectors
+- **FAT size**: 2880 sectors × 1.5 bytes/entry = 4320 bytes = 9 sectors (rounded up)
+- **Data area starts**: 1 + 9 + 9 + 14 = sector 33
+- **Available clusters**: (2880 - 33) / 1 = 2847 clusters
+
+**Why two FATs?**
+- Redundancy: If one gets corrupted, the other can be used
+- Standard FAT12 specification requires it
+- Tools like `fsck` can repair using backup FAT
+
+### File Allocation Table (FAT12)
+
+**How FAT12 works:**
+
+FAT12 uses 12 bits (1.5 bytes) per cluster entry. Entries are packed:
+
+```text
+Byte offset:  0     1     2     3     4     5     6
+              ┌─────┬─────┬─────┬─────┬─────┬─────┬─────┐
+              │  C0 │C1|C0│  C1 │  C2 │C3|C2│  C3 │ ... │
+              └─────┴─────┴─────┴─────┴─────┴─────┴─────┘
+Bit layout:   <-12->  <-12->  <-12->  <-12->  <-12->
+              Cluster Cluster Cluster Cluster Cluster
+                 0       1       2       3       4
+```
+
+**Example: Reading cluster 5**
+- Byte offset = 5 × 3 / 2 = 7.5 → byte 7
+- Load 16 bits from byte 7
+- Since cluster is odd: shift right 4 bits
+- Result = next cluster number (or 0xFF8-0xFFF for EOF)
+
+**Special FAT values:**
+- `0x000`: Free cluster
+- `0x001`: Reserved
+- `0x002-0xFF6`: Points to next cluster in chain
+- `0xFF7`: Bad cluster (hardware defect)
+- `0xFF8-0xFFF`: End of file marker
+
+**Example file chain:**
+```text
+File: STAGE2.BIN (3 clusters)
+
+Root Directory Entry:
+  FirstCluster = 2
+
+FAT entries:
+  FAT[2] = 3    → Continue to cluster 3
+  FAT[3] = 4    → Continue to cluster 4
+  FAT[4] = 0xFFF → End of file
+```
+
+### C Code Integration Details
+
+**Why Open Watcom?**
+- One of few compilers still supporting 16-bit x86 targets
+- Can generate real mode code
+- Produces small, efficient binaries
+- Active maintenance and good documentation
+- Alternatives (Turbo C, Borland C) are obsolete
+
+**Memory models:**
+- **Tiny**: Code+data in 64 KB, CS=DS=SS
+- **Small**: Code in 64 KB, data in 64 KB (separate segments)
+- **Compact**: Code in 64 KB, data can span multiple 64 KB segments
+- **Medium**: Code can span segments, data in 64 KB
+- **Large**: Both code and data can span segments
+- **Huge**: Like large but single arrays can exceed 64 KB
+
+**We use Small model** because:
+- Stage 2 code < 64 KB
+- Stage 2 data < 64 KB
+- Simplest, fastest model
+- Near pointers only (no segment manipulation needed)
+
+**Calling convention (_cdecl):**
+```text
+Stack before call:
+┌──────────────┐
+│  Parameter N │  ← BP + 2N+2
+├──────────────┤
+│     ...      │
+├──────────────┤
+│  Parameter 2 │  ← BP + 6
+├──────────────┤
+│  Parameter 1 │  ← BP + 4
+├──────────────┤
+│ Return Addr  │  ← BP + 2
+├──────────────┤
+│  Saved BP    │  ← BP (current base pointer)
+├──────────────┤
+│   Locals     │  ← BP - 2, BP - 4, ...
+└──────────────┘  ← SP (stack pointer)
+```
+
+**Why this matters:**
+- C compiler generates code assuming this layout
+- Assembly wrappers must match this convention
+- Misalignment causes corrupted parameters/crashes
 
 ---
 
@@ -1023,34 +1656,131 @@ The bootloader follows this chain to load all parts of the kernel.
 
 ### Prerequisites
 
-- **NASM** (Netwide Assembler): `sudo apt install nasm`
-- **GCC** (GNU Compiler Collection): Usually pre-installed on Linux
-- **mtools**: `sudo apt install mtools` (for mcopy)
-- **QEMU** (optional, for testing): `sudo apt install qemu-system-x86`
+**Required tools:**
+- **NASM** (Netwide Assembler): `sudo apt install nasm` or `sudo dnf install nasm`
+- **Open Watcom C/C++**: Download from https://open-watcom.github.io/
+  - Install to `/usr/local/watcom` or set `WATCOM` environment variable
+  - Add `$WATCOM/binl64` (or `binl`) to PATH
+- **mtools**: `sudo apt install mtools` or `sudo dnf install mtools`
+- **GCC**: Usually pre-installed (for building FAT utility)
+
+**Optional tools:**
+- **QEMU**: `sudo apt install qemu-system-x86` or `sudo dnf install qemu-system-x86`
+- **GNU Make**: Usually pre-installed
+
+**Verifying installation:**
+```bash
+nasm -version          # Should show NASM version
+wcc -?                 # Should show Watcom C compiler help
+wlink -?               # Should show Watcom linker help
+mcopy -V               # Should show mtools version
+qemu-system-i386 --version  # Should show QEMU version
+```
 
 ### Building
 
 ```bash
-# Build everything
+# Build everything (Stage 1, Stage 2, kernel, floppy image, tools)
 make
 
-# Build only the floppy image
+# Build only Stage 1 bootloader
+make stage1
+
+# Build only Stage 2 bootloader
+make stage2
+
+# Build floppy image (requires stage1, stage2, kernel)
 make floppy_image
 
-# Build only the FAT utility
+# Build FAT utility
 make tools_fat
 
-# Clean build artifacts
+# Clean all build artifacts
 make clean
+```
+
+**Build output:**
+```text
+build/
+├── stage1.bin          # Stage 1 bootloader (512 bytes)
+├── stage2.bin          # Stage 2 bootloader (raw binary)
+├── stage2.map          # Linker map file (for debugging)
+├── kernel.bin          # Kernel (if built)
+├── main_floppy.img     # Bootable 1.44 MB floppy image
+├── stage2/
+│   ├── asm/
+│   │   ├── main.obj    # Assembled from main.asm
+│   │   └── x86.obj     # Assembled from x86.asm
+│   └── c/
+│       ├── main.obj    # Compiled from main.c
+│       └── stdio.obj   # Compiled from stdio.c
+└── tools/
+    └── fat             # FAT12 utility executable
 ```
 
 ### Running in QEMU
 
+**Using the run script:**
 ```bash
-# Using the provided script
 ./run.sh
+```
 
-# Or manually
+**Or manually:**
+```bash
+qemu-system-i386 -fda build/main_floppy.img
+```
+
+**Advanced QEMU options:**
+```bash
+# Suppress format warning
+qemu-system-i386 -drive file=build/main_floppy.img,if=floppy,format=raw
+
+# Enable debugging (GDB stub on port 1234)
+qemu-system-i386 -fda build/main_floppy.img -s -S
+
+# Boot with serial console
+qemu-system-i386 -fda build/main_floppy.img -serial stdio
+
+# Increase memory
+qemu-system-i386 -fda build/main_floppy.img -m 64M
+```
+
+### Running on Real Hardware
+
+**Creating a bootable USB:**
+```bash
+# WARNING: This will erase the USB drive!
+# Replace /dev/sdX with your USB device
+sudo dd if=build/main_floppy.img of=/dev/sdX bs=512
+
+# Verify
+sudo fdisk -l /dev/sdX
+```
+
+**Creating a bootable CD:**
+```bash
+# Create El Torito bootable ISO
+genisoimage -b build/main_floppy.img -o bootable.iso -no-emul-boot
+```
+
+### Running in VirtualBox
+
+1. Create new virtual machine
+2. Type: Other, Version: Other/Unknown
+3. Memory: 64 MB (minimum)
+4. Disable hard disk
+5. Settings → Storage → Add Floppy Controller
+6. Add `main_floppy.img` as floppy disk
+7. Start VM
+
+### Running in VMware
+
+1. Create new virtual machine
+2. Guest OS: Other → Other
+3. Remove hard disk
+4. Add floppy drive
+5. Point to `main_floppy.img`
+6. Power on
 qemu-system-i386 -fda build/main_floppy.img
 ```
 
@@ -1070,44 +1800,460 @@ qemu-system-i386 -fda build/main_floppy.img
 
 ## Technical Details
 
+### Current Project Status
+
+**✅ Implemented:**
+- Two-stage bootloader architecture
+- Stage 1: Assembly bootloader with FAT12 filesystem support
+- Stage 2: Mixed C and assembly bootloader
+- Open Watcom C compiler integration
+- Custom C standard library (stdint.h, stdio.h)
+- BIOS interrupt wrappers (x86.asm)
+- Modular build system with sub-Makefiles
+- FAT12 utility for reading disk images
+
+**🚧 In Progress:**
+- Kernel loading from Stage 2
+- Enhanced error handling and diagnostics
+
+**📋 Future Plans:**
+- 32-bit protected mode transition
+- Memory management (paging, heap allocator)
+- Keyboard and mouse drivers
+- Simple shell/command interpreter
+- FAT12 write support
+- Multi-tasking support
+
 ### Why FAT12?
 
-FAT12 is the simplest filesystem:
-- Easy to implement
-- Well-documented
-- Supported by all operating systems
-- Perfect for learning OS development
+FAT12 is ideal for learning OS development:
+
+**Advantages:**
+- Simple structure (easy to understand and implement)
+- Well-documented specification
+- Supported by all operating systems (can read/write on Windows, Linux, macOS)
+- Small metadata overhead
+- No complex structures (no journaling, no permissions)
+
+**Limitations:**
+- Maximum disk size: ~32 MB (4086 clusters × 8 KB/cluster)
+- For floppies: Maximum 2847 clusters
+- 12-bit addressing limits scalability
+- No file permissions or timestamps (basic support only)
+- Fragmentation can waste space
+
+**Why not FAT16/FAT32?**
+- More complex entry packing
+- Larger metadata structures
+- Unnecessary for floppy-sized media
+- FAT12 teaches core concepts that apply to all FAT variants
 
 ### Real Mode vs Protected Mode
 
-This OS runs entirely in **16-bit real mode**:
-- Direct hardware access
-- 1 MB memory limit (only 640 KB usable)
-- No memory protection
-- Simple to program but unsafe
+**Current: 16-bit Real Mode**
 
-Modern OSes use **32-bit protected mode** or **64-bit long mode** which provide:
-- Memory protection
-- Virtual memory
-- Access to all system memory
-- Hardware-assisted multitasking
+This OS currently runs in real mode (8086 compatible):
 
-### Why 512-byte Boot Sector Limit?
+**Characteristics:**
+- Segmented memory model: `address = segment × 16 + offset`
+- 1 MB address space (20-bit addressing)
+- Only 640 KB usable (upper 384 KB reserved for hardware)
+- No memory protection (any code can access any memory)
+- No privilege levels (all code runs in Ring 0)
+- Direct hardware access via port I/O
+- BIOS interrupts available
 
-Historical reasons:
-- Original IBM PC BIOS specification
-- One sector was considered sufficient for bootstrap code
-- Real bootloaders (like GRUB) use multi-stage loading
+**Advantages for learning:**
+- Simple to understand
+- Direct hardware control
+- No complex setup required
+- BIOS provides device drivers
+- Easy to debug with QEMU
+
+**Disadvantages:**
+- Severe memory limitations
+- No memory protection (crashes can corrupt everything)
+- No multitasking support
+- 16-bit only (slow on modern CPUs)
+- Security vulnerabilities
+
+**Future: 32-bit Protected Mode**
+
+Protected mode enables modern OS features:
+
+**Characteristics:**
+- Flat memory model: 4 GB address space
+- Memory protection (segments can be read-only, execute-only, etc.)
+- Privilege levels (Ring 0-3): kernel vs user code
+- Virtual memory support (paging)
+- Hardware task switching
+- Interrupt Descriptor Table (IDT) replaces IVT
+
+**Transition process:**
+1. Disable interrupts
+2. Load Global Descriptor Table (GDT)
+3. Enable A20 line (access above 1 MB)
+4. Set PE bit in CR0 register
+5. Far jump to 32-bit code segment
+6. Setup new segment registers
+7. Setup IDT for protected mode interrupts
+8. Re-enable interrupts
+
+**Future: 64-bit Long Mode**
+
+Ultimate goal for modern OS:
+
+**Characteristics:**
+- 64-bit registers and addressing
+- Flat memory model (no segmentation)
+- 48-bit virtual addresses (256 TB)
+- NX bit (non-executable pages)
+- Canonical addressing
+- Required for modern CPUs
+
+### Open Watcom Compiler Details
+
+**Why Open Watcom?**
+
+Open Watcom is one of the few compilers still supporting 16-bit targets:
+
+**Alternatives comparison:**
+| Compiler | Status | 16-bit Support | License |
+|----------|--------|----------------|---------|
+| Open Watcom | Active (2024) | ✅ Excellent | Open Source (Sybase License) |
+| Turbo C | Obsolete (1990s) | ✅ Native | Proprietary (freeware) |
+| Borland C | Obsolete (2000s) | ✅ Native | Proprietary |
+| GCC | Active | ⚠️ Limited (ia16-elf-gcc fork) | GPL |
+| Clang | Active | ❌ No support | Apache 2.0 |
+
+**Open Watcom advantages:**
+- Modern build system (Make compatible)
+- Good optimizer (produces compact code)
+- Comprehensive documentation
+- Cross-platform (Linux, Windows, macOS)
+- Active community
+- C and C++ support
+- Inline assembly support
+
+**Compiler optimizations:**
+
+```bash
+-ox    # Maximum optimization
+-os    # Optimize for size
+-ot    # Optimize for speed
+-ol+   # Loop optimizations
+-oi+   # Inline intrinsics
+```
+
+Current flags (`-4 -d3 -s -wx -ms -zl -zq`):
+- `-4`: 80386 instructions (backwards compatible to 80286/8086)
+- `-d3`: Full debugging info (line numbers, variable names)
+- `-s`: Disable stack overflow checking (saves ~20 bytes per function)
+- `-wx`: Maximum warnings (helps catch errors)
+- `-ms`: Small memory model
+- `-zl`: No default library (we provide our own functions)
+- `-zq`: Quiet (suppress banner)
+
+### Linker Script Analysis
+
+The `linker.lnk` file controls Stage 2's memory layout:
+
+```text
+OPTION NODEFAULTLIBS     # Don't link C runtime
+OPTION NOINIT            # Don't run C initialization code
+ORDER                    # Segment order in output file
+    CLNAME CODE SEGMENT _ENTRY    # Assembly entry (first)
+    CLNAME CODE SEGMENT _TEXT      # C code (second)
+    CLNAME DATA SEGMENT CONST      # Read-only data
+    CLNAME DATA SEGMENT CONST2     # More read-only data
+    CLNAME DATA SEGMENT _DATA      # Initialized variables
+OPTION OFFSET=0          # Start at offset 0
+OPTION START=entry       # Entry point symbol
+FORMAT RAW BIN           # Raw binary output
+```
+
+**Why this order?**
+1. `_ENTRY` must be first (Stage 1 jumps to byte 0)
+2. Code sections before data (standard practice)
+3. Predictable layout for debugging
+
+**Alternative: OMF EXE format**
+```text
+FORMAT DOS              # MS-DOS EXE format
+OPTION STACK=2048      # Stack size
+OPTION START=_main     # C main() function
+LIBPATH %WATCOM%/lib286  # Link with C runtime
+```
+
+This would create a .COM or .EXE file, but we need raw binary.
+
+### BIOS Interrupts Used
+
+**INT 10h - Video Services**
+- `AH=0x00`: Set video mode
+- `AH=0x0E`: Teletype output (used in puts)
+- `AH=0x13`: Write string
+
+**INT 13h - Disk Services**
+- `AH=0x00`: Reset disk system
+- `AH=0x02`: Read sectors (used extensively)
+- `AH=0x08`: Get drive parameters
+- `AH=0x15`: Get disk type
+
+**INT 16h - Keyboard Services**
+- `AH=0x00`: Wait for keypress (used in error handling)
+- `AH=0x01`: Check for keypress
+
+**Why use BIOS?**
+- Pre-written device drivers
+- Works on all hardware
+- Simple interface
+- No driver development needed
+
+**Disadvantages:**
+- Only available in real mode
+- Slow (mode switches on modern CPUs)
+- Limited functionality
+- Must implement own drivers for protected mode
+
+### Debugging Techniques
+
+**QEMU debugging:**
+```bash
+# Start QEMU with GDB stub
+qemu-system-i386 -fda build/main_floppy.img -s -S
+
+# In another terminal, start GDB
+gdb
+(gdb) target remote localhost:1234
+(gdb) set architecture i8086
+(gdb) break *0x7c00        # Break at bootloader start
+(gdb) continue
+(gdb) x/32xb 0x7c00        # Examine memory
+(gdb) info registers
+```
+
+**QEMU monitor:**
+```bash
+# Press Ctrl+Alt+2 in QEMU window
+(qemu) info registers       # Show CPU state
+(qemu) info mem            # Show memory map
+(qemu) x /10i $pc          # Disassemble at PC
+(qemu) xp /32x 0x7c00      # Dump memory (physical)
+```
+
+**Bochs debugging:**
+```bash
+# Install Bochs with debugger
+sudo apt install bochs bochs-x
+
+# Create bochsrc.txt
+floppya: 1_44=build/main_floppy.img, status=inserted
+boot: floppy
+display_library: x, options="gui_debug"
+
+# Run
+bochs -f bochsrc.txt -q
+```
+
+**Adding debug output:**
+```c
+void debug_byte(uint8_t value) {
+    putc((value >> 4) < 10 ? '0' + (value >> 4) : 'A' + (value >> 4) - 10);
+    putc((value & 0xF) < 10 ? '0' + (value & 0xF) : 'A' + (value & 0xF) - 10);
+}
+```
 
 ### Common Issues and Solutions
 
-**Issue:** `make: nasm: No such file or directory`
-- **Solution:** Install NASM: `sudo apt install nasm`
+**Issue:** `wcc: No such file or directory`
+- **Solution:** Install Open Watcom and add to PATH
+  ```bash
+  export WATCOM=/usr/local/watcom
+  export PATH=$WATCOM/binl64:$PATH
+  ```
 
-**Issue:** `mcopy: command not found`
-- **Solution:** Install mtools: `sudo apt install mtools`
+**Issue:** `Error! E2028: symbol is an undefined reference`
+- **Solution:** Check function name mangling (C adds `_` prefix)
+- Verify `global _function_name` in assembly
+- Ensure `extern` declaration in C header
 
-**Issue:** `KERNEL.BIN not found!` when booting
+**Issue:** `Warning! W1014: stack segment not found`
+- **Solution:** This is normal for raw binaries (we set SS:SP manually)
+- Safe to ignore
+
+**Issue:** `STAGE2.BIN not found!` when booting
+- **Solution:** Verify Stage 2 was copied to image
+  ```bash
+  mdir -i build/main_floppy.img ::/
+  ```
+- Check filename (must be `STAGE2  BIN` with spaces)
+
+**Issue:** Stage 2 crashes immediately
+- **Solution:** Check linker map file (`stage2.map`)
+- Verify entry point is at offset 0
+- Check segment initialization in main.asm
+- Use QEMU debugger to inspect
+
+**Issue:** Garbage characters on screen
+- **Solution:** Check string null terminator
+- Verify correct segment registers (DS should point to string data)
+- Ensure `_TEXT` segment is correctly loaded
+
+**Issue:** Parameters passed to C function are wrong
+- **Solution:** Verify stack frame layout
+- Check Open Watcom calling convention (parameters at BP+4, BP+6, ...)
+- Ensure parameter types match (uint8_t is 8-bit, uint16_t is 16-bit)
+
+### Performance Considerations
+
+**Stage 1 Bootloader:**
+- Loading time: ~2 seconds on real hardware (floppy seeks are slow)
+- Code size: 512 bytes (fully utilized)
+- Memory usage: ~30 KB (FAT + root directory buffers)
+
+**Stage 2 Bootloader:**
+- Current size: ~34 bytes (minimal test code)
+- Maximum practical size: ~29 KB (before hitting Stage 1 at 0x7C00)
+- Load time: ~1 second for 10 KB file
+- C code overhead: ~200 bytes (startup code, stack setup)
+
+**Optimization tips:**
+- Use `-os` for size optimization
+- Inline small functions manually
+- Avoid large local variables (use globals)
+- Use `register` keyword for frequently used variables
+- Unroll small loops
+- Use bitwise operations instead of multiply/divide
+
+**Size comparison:**
+```text
+Component         Size      Percentage
+=====================================
+Stage 1          512 B      100% (fixed)
+Stage 2 (asm)     19 B       56%
+Stage 2 (C)       15 B       44%
+Total Stage 2     34 B      100%
+```
+
+Stage 2 will grow significantly as features are added (target: ~10-20 KB).
+
+---
+
+## Future Enhancement Ideas
+
+**Short term (next steps):**
+- ✅ Display message from Stage 2 C code
+- 🔄 Load kernel from Stage 2
+- 🔄 Enhanced error messages
+- ⬜ Keyboard input handling
+- ⬜ Basic memory detection
+
+**Medium term:**
+- ⬜ Transition to 32-bit protected mode
+- ⬜ Setup GDT and IDT
+- ⬜ Implement basic paging
+- ⬜ Simple memory allocator (heap)
+- ⬜ VGA text mode driver (replace BIOS)
+
+**Long term:**
+- ⬜ Multi-tasking (cooperative then preemptive)
+- ⬜ System calls (INT 0x80 or SYSCALL)
+- ⬜ User mode vs kernel mode
+- ⬜ ELF executable loader
+- ⬜ Simple shell
+- ⬜ Virtual File System (VFS)
+- ⬜ Block device abstraction
+- ⬜ FAT16/32 support
+- ⬜ PS/2 keyboard driver
+- ⬜ PIC (Programmable Interrupt Controller) driver
+- ⬜ PIT (Programmable Interval Timer) driver
+
+**Advanced features:**
+- ⬜ VESA graphics mode
+- ⬜ Networking (NE2000 or RTL8139 driver)
+- ⬜ ATA/ATAPI disk driver
+- ⬜ Simple GUI (windowing system)
+- ⬜ Transition to 64-bit long mode
+
+---
+
+## Learning Resources
+
+**Essential reading:**
+- [OSDev Wiki](https://wiki.osdev.org/) - Comprehensive OS development resource
+- [Intel 80386 Programmer's Reference](https://pdos.csail.mit.edu/6.828/2018/readings/i386.pdf) - CPU architecture
+- [BIOS Interrupt List](http://www.ctyme.com/intr/int.htm) - Complete interrupt reference
+- [FAT Filesystem Specification](https://download.microsoft.com/download/1/6/1/161ba512-40e2-4cc9-843a-923143f3456c/fatgen103.doc) - Microsoft's official spec
+
+**Tutorials:**
+- [Writing a Simple Operating System from Scratch](https://www.cs.bham.ac.uk/~exr/lectures/opsys/10_11/lectures/os-dev.pdf) - Excellent intro
+- [Bran's Kernel Development Tutorial](http://www.osdever.net/bran/kdev/) - Classic tutorial
+- [JamesM's Kernel Development Tutorials](http://www.jamesmolloy.co.uk/tutorial_html/) - Modern approach
+
+**Books:**
+- "Operating Systems: Design and Implementation" by Andrew Tanenbaum (MINIX)
+- "Operating System Concepts" by Silberschatz, Galvin, Gagne
+- "Modern Operating Systems" by Andrew Tanenbaum
+
+**Tools documentation:**
+- [Open Watcom Documentation](http://openwatcom.org/doc.php)
+- [NASM Manual](https://www.nasm.us/xdoc/2.15.05/html/nasmdoc0.html)
+- [QEMU Documentation](https://www.qemu.org/docs/master/)
+
+**Community:**
+- [OSDev Forum](https://forum.osdev.org/) - Active community
+- [r/osdev](https://www.reddit.com/r/osdev/) - Reddit community
+- [OSDev Discord](https://discord.gg/RnCtsqD) - Real-time chat
+
+---
+
+## License
+
+See LICENSE file for details.
+
+---
+
+## Acknowledgments
+
+This project was built by following various online tutorials and resources, with significant enhancements and documentation. The journey from a single-stage bootloader to a two-stage C-based bootloader demonstrates the evolution of understanding and skill development in OS programming.
+
+**Key learning milestones:**
+1. Understanding BIOS boot process and boot sector constraints
+2. Implementing FAT12 filesystem parsing
+3. Managing memory in real mode
+4. Integrating C code with assembly
+5. Using Open Watcom for bare-metal development
+6. Creating modular build systems
+7. Debugging low-level code
+
+The experience gained includes:
+- Low-level programming in x86 assembly
+- Bare-metal C programming (no standard library)
+- Filesystem implementation
+- Hardware interfacing (BIOS interrupts)
+- Bootloader development
+- Build system design
+- Cross-platform development
+- Debugging techniques for system software
+
+This project serves as an educational foundation for understanding:
+- How computers boot
+- How operating systems manage hardware
+- How filesystems organize data
+- How compilers and linkers work
+- The interface between software and hardware
+- Memory management in constrained environments
+
+**Current status:** Successfully boots in QEMU, displays "Hello world from C!_" from Stage 2 bootloader. Ready for next phase: kernel loading and protected mode transition.
+
+Happy OS development! 🚀
+
+---
+
+*Last updated: November 14, 2025*
+*Project phase: Two-stage bootloader with C integration (complete)*
+*Next milestone: Kernel loading and protected mode*
 - **Solution:** Ensure kernel.bin was copied correctly. Check with:
   ```bash
   mdir -i build/main_floppy.img ::/
