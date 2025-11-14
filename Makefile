@@ -70,4 +70,5 @@ clean:
 	@if [ -f "$(SRC_DIR)/bootloader/stage2/Makefile" ]; then \
 		$(MAKE) -C $(SRC_DIR)/bootloader/stage2 BUILD_DIR=$(abspath $(BUILD_DIR)) clean; \
 	fi
+	rm -f $(SRC_DIR)/bootloader/stage2/*.err
 	rm -rf $(BUILD_DIR)/*
