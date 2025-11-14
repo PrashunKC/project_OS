@@ -200,4 +200,4 @@ int main(int argc, char** argv)
 
 // ... There aren't many comments in this code. I am tired of writing that many on assembly portion of the osdev project. So I decided to write more C code for utilities like this one.
 
-// ... Worked on this with less than 3 hours of sleep, most reasonable choice ik ik :D
+// ... Worked on this with less than 3 hours of sleep, most reasonable life choice ik ik :D
