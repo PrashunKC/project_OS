@@ -98,25 +98,25 @@ start:
     xor bx, bx
     mov di, buffer
 
-.search_kernel:
-    mov si, file_kernel_bin
+.search_stage2:
+    mov si, file_stage2_bin
     mov cx, 11
     push di
     repe cmpsb
     pop di
-    je .found_kernel
+    je .found_stage2
 
     add di, 32
     inc bx
     cmp bx, [bdb_dir_entries_count]
-    jl .search_kernel
+    jl .search_stage2
 
-    jmp kernel_not_found_error
+    jmp stage2_not_found_error
 
-.found_kernel:
+.found_stage2:
 
     mov ax, [di + 26]
-    mov [kernel_cluster], ax
+    mov [stage2_cluster], ax
 
     mov ax, [bdb_reserved_sectors]
     mov bx, buffer
@@ -124,21 +124,21 @@ start:
     mov dl, [ebr_drive_number]
     call disk_read
 
-    mov bx, KERNEL_LOAD_SEGMENT
+    mov bx, stage2_LOAD_SEGMENT
     mov es, bx
-    mov bx, KERNEL_LOAD_OFFSET
+    mov bx, stage2_LOAD_OFFSET
 
-.load_kernel_loop:
-    mov ax, [kernel_cluster]
+.load_stage2_loop:
+    mov ax, [stage2_cluster]
     add ax, 31                              ; not nice, hard coaded value :( <-------------------------------------------------------------- agent, fix this pls! :D 
 
     mov cl, 1
     mov dl, [ebr_drive_number]
     call disk_read
 
-    add bx, [bdb_bytes_per_sector]          ; if kernel.bin is > 64KB, data corruption will occour... <-------------------------------------------------------------- agent, fix this as well pls! :D 
+    add bx, [bdb_bytes_per_sector]          ; if stage2.bin is > 64KB, data corruption will occour... <-------------------------------------------------------------- agent, fix this as well pls! :D 
 
-    mov ax, [kernel_cluster]
+    mov ax, [stage2_cluster]
     mov cx, 3
     mul cx
     mov cx, 2
@@ -162,16 +162,16 @@ start:
     cmp ax, 0x0FF8
     jae .read_finish
 
-    mov [kernel_cluster], ax
-    jmp .load_kernel_loop
+    mov [stage2_cluster], ax
+    jmp .load_stage2_loop
 
 .read_finish:
     mov dl, [ebr_drive_number]
-    mov ax, KERNEL_LOAD_SEGMENT
+    mov ax, stage2_LOAD_SEGMENT
     mov ds, ax
     mov es, ax
 
-    jmp KERNEL_LOAD_SEGMENT:KERNEL_LOAD_OFFSET
+    jmp stage2_LOAD_SEGMENT:stage2_LOAD_OFFSET
 
 ;
 ;   Error handling
@@ -182,8 +182,8 @@ floppy_error:
     call puts
     jmp wait_key_and_reboot
 
-kernel_not_found_error:
-    mov si, msg_kernel_not_found
+stage2_not_found_error:
+    mov si, msg_stage2_not_found
     call puts
     jmp wait_key_and_reboot
 
@@ -320,12 +320,12 @@ puts:
 
 msg_loading:            db 'Loading...', ENDL, 0
 msg_read_failed:        db 'Read from disk failed!', ENDL, 0
-msg_kernel_not_found:   db 'KERNEL.BIN not found!', ENDL, 0
-file_kernel_bin:        db 'KERNEL  BIN'
-kernel_cluster:         dw 0
+msg_stage2_not_found:   db 'stage2.BIN not found!', ENDL, 0
+file_stage2_bin:        db 'stage2  BIN'
+stage2_cluster:         dw 0
 
-KERNEL_LOAD_SEGMENT     equ 0x2000
-KERNEL_LOAD_OFFSET      equ 0
+stage2_LOAD_SEGMENT     equ 0x2000
+stage2_LOAD_OFFSET      equ 0
 
 times 510-($-$$) db 0
 dw 0AA55h

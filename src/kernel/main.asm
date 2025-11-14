@@ -6,7 +6,7 @@ bits 16
 
 
 start:
-    ; Set up segment registers for kernel
+    ; Set up segment registers for stage2
     mov ax, 0x2000
     mov ds, ax
     mov es, ax
@@ -44,4 +44,4 @@ puts:
     ret
 
 
-msg_hello: db 'Hello world from kernel!', ENDL, 0
+msg_hello: db 'Hello world from stage2!', ENDL, 0
