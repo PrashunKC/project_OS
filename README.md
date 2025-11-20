@@ -11,7 +11,7 @@ My journey of scouring the depths of the internet to learn and build my very own
 
 **Expected output:**
 ```
-Hello world from C!█
+Hello world from kernel!
 ```
 
 **What this demonstrates:**
@@ -19,8 +19,9 @@ Hello world from C!█
 - ✅ FAT12 filesystem reading operational  
 - ✅ C code executing in 16-bit real mode
 - ✅ BIOS interrupts accessible from C
+- ✅ Kernel loading and execution
 
-**Current status:** Stage 1 and Stage 2 bootloaders complete. Kernel loading not yet implemented.
+**Current status:** Stage 1 and Stage 2 bootloaders complete. Kernel loading implemented.
 
 ## Table of Contents
 1. [Project Overview](#project-overview)
@@ -84,7 +85,7 @@ Power On → BIOS → Stage 1 Bootloader (512 bytes) → Stage 2 Bootloader (C +
 0x0000:0x0500 - Stage 2 bootloader loaded here
 0x0000:0x7C00 - Stage 1 bootloader loaded here (512 bytes)
 0x0000:0x7E00 - Buffer for disk operations
-0x2000:0x0000 - Kernel loaded here (future)
+0x00100000    - Kernel loaded here (Protected Mode)
 ```
 
 ### Key Advantages of Two-Stage Design
@@ -192,15 +193,25 @@ entry:
 ```c
 #include "stdint.h"
 #include "stdio.h"
+#include "disk.h"
+#include "fat.h"
+#include "memory.h"
 
 void _cdecl cstart_(uint16_t bootDrive)
 {
-    puts("Hello world from C!");
-    for(;;);
+    // Initialize Disk and FAT
+    // Load Kernel from /kernel.bin
+    // Copy Kernel to 0x100000 (1MB)
+    // Jump to Kernel
 }
 ```
 
-**Important Note**: The function includes an infinite loop `for(;;)` to prevent returning to the assembly code, as the kernel loading functionality is not yet implemented.
+**Key responsibilities:**
+- Initialize disk driver with boot drive number
+- Initialize FAT12 filesystem driver
+- Load `kernel.bin` from the filesystem
+- Copy kernel to protected mode memory (1MB mark)
+- Transfer control to the kernel
 
 **Compiler**: Open Watcom C Compiler (wcc)
 - **Target**: 16-bit real mode (80186/80286 compatible)
@@ -427,30 +438,49 @@ _x86_Video_WriteCharTeletype:
 
 ---
 
-### Kernel (main.asm)
+### Kernel (entry.asm + main.c)
 
-The kernel is currently a simple demonstration that prints a message. In the future, this will be replaced with a full-featured operating system kernel.
+The kernel is now a 32-bit protected mode program written in C.
 
-**Current implementation:**
+#### entry.asm - Kernel Entry Point
 
 ```assembly
-org 0x0
-bits 16
+bits 32
+global _start
+extern start
 
-start:
-    mov ax, 0x2000     ; Segment where kernel would be loaded
-    mov ds, ax
-    mov es, ax
-    
-    mov si, msg_hello
-    call puts
-    
-.halt:
-    cli                ; Disable interrupts
-    hlt                ; Halt CPU
+section .entry
+_start:
+    ; Set up stack for kernel at 2MB mark
+    mov esp, 0x200000
+    mov ebp, esp
+
+    call start
+    cli
+    hlt
 ```
 
-The kernel would be loaded by Stage 2 (not yet implemented) at memory address `0x2000:0x0000`.
+**Responsibilities:**
+- Establish a valid stack environment (stack pointer at `0x200000`)
+- Call the C kernel entry point (`start`)
+- Halt the CPU if the kernel returns
+
+#### main.c - C Kernel Implementation
+
+```c
+void _cdecl start(uint16_t bootDrive)
+{
+    // Write "Hello world from kernel" to video memory
+    const char *str = "Hello world from kernel";
+    uint8_t *video = (uint8_t *)0xB8000;
+    
+    // ... (write string to video memory) ...
+    
+    for (;;);
+}
+```
+
+The kernel currently writes directly to VGA text mode memory (`0xB8000`) to display a message, proving that we are successfully executing C code in protected mode.
 
 ---
 
@@ -1518,10 +1548,17 @@ Removes all build artifacts.
    - **Return and halt**
      - If C code returns, assembly entry point halts CPU
 
-4. **Future: Kernel Execution** (not yet implemented)
-   - Stage 2 would load `KERNEL.BIN` from FAT12
-   - Transfer control to kernel at `0x2000:0x0000`
-   - Kernel initializes hardware, memory management, etc.
+4. **Kernel Execution**
+   - **Loading**:
+     - Stage 2 opens `kernel.bin` using FAT12 driver
+     - Reads file to a temporary low-memory buffer (e.g., `0x30000`)
+     - Copies kernel to `0x100000` (1MB mark) in high memory
+   - **Execution**:
+     - Stage 2 jumps to kernel entry point
+     - `entry.asm` sets up the stack at `0x200000`
+     - Calls C function `start()`
+     - Kernel writes "Hello world from kernel" directly to video memory (`0xB8000`)
+     - System halts
 
 ### Memory Map During Execution
 
@@ -1533,11 +1570,10 @@ Address Range                      Contents                                  Siz
 0x0000:0x0500 - 0x0000:0x7BFF     Stage 2 Bootloader (loaded here)          ~29.5 KB  Read/Execute
 0x0000:0x7C00 - 0x0000:0x7DFF     Stage 1 Bootloader (BIOS loads here)      512 bytes Read/Execute
 0x0000:0x7E00 - 0x0000:0xFFFF     FAT buffer, stack, free memory            ~32.5 KB  Read/Write
-0x1000:0x0000 - 0x1FFF:0xFFFF     Free conventional memory                  ~64 KB    Available
-0x2000:0x0000 - 0x2FFF:0xFFFF     Kernel (future, not yet used)             up to 64KB Available
-0x3000:0x0000 - 0x9FFF:0xFFFF     Free conventional memory                  ~896 KB   Available
-0xA000:0x0000 - 0xBFFF:0xFFFF     Video memory (text mode @ B8000)          128 KB    Read/Write
-0xC000:0x0000 - 0xFFFF:0xFFFF     BIOS ROM, hardware mappings               256 KB    Read-only
+0x00010000    - 0x0009FFFF        Free conventional memory                  ~576 KB   Available
+0x000A0000    - 0x000BFFFF        Video memory (text mode @ B8000)          128 KB    Read/Write
+0x000C0000    - 0x000FFFFF        BIOS ROM, hardware mappings               256 KB    Read-only
+0x00100000    - ...               Kernel (Protected Mode)                   -         Execute
 ```
 
 **Actual Memory Usage During Boot:**
@@ -1764,10 +1800,9 @@ The OS successfully demonstrates:
 - ✅ Screen output working
 
 **What's NOT yet implemented:**
-- ❌ Kernel loading (Stage 2 doesn't load kernel yet)
 - ❌ Keyboard input handling
-- ❌ Protected mode transition
-- ❌ Memory management
+- ❌ Memory management (paging, heap)
+- ❌ Interrupt Descriptor Table (IDT) setup
 - ❌ Any actual OS functionality
 
 ### Prerequisites
@@ -2383,13 +2418,10 @@ project_OS/
   - ❌ No advanced initialization
 - 🚧 Error handling
   - ✅ Stage 1 has error messages
-  - ❌ Stage 2 has no error handling
-  - ❌ No diagnostic output
+  - ✅ Stage 2 has error handling (printf)
+  - ✅ Diagnostic output available
 
 **❌ Not Yet Implemented:**
-- ❌ Kernel loading from Stage 2
-- ❌ Kernel.bin execution
-- ❌ Protected mode transition
 - ❌ Memory management (paging, heap)
 - ❌ Interrupt Descriptor Table (IDT) setup
 - ❌ Device drivers (keyboard, disk, etc.)
@@ -2401,43 +2433,30 @@ project_OS/
 
 ### Next Steps (Priority Order)
 
-**Immediate Next Steps (Stage 2 Enhancement):**
-1. **Implement kernel loading in Stage 2**
-   - Add FAT12 reading code to Stage 2 (C implementation)
-   - Load KERNEL.BIN from filesystem
-   - Transfer control to kernel at 0x2000:0x0000
-   - Pass boot drive and memory map to kernel
+**Immediate Next Steps (Kernel Enhancement):**
+1. **Setup Interrupt Descriptor Table (IDT)**
+   - Handle CPU exceptions
+   - Remap PIC (Programmable Interrupt Controller)
+   - Enable hardware interrupts
 
-2. **Add error handling to Stage 2**
-   - Implement error message printing
-   - Handle file not found errors
-   - Handle disk read errors
-   - Provide diagnostic information
+2. **Memory Management**
+   - Implement Physical Memory Manager (PMM)
+   - Implement Virtual Memory Manager (VMM) / Paging
 
-3. **Memory detection**
-   - Use BIOS INT 0x15, EAX=0xE820 to detect memory
-   - Create memory map for kernel
-   - Pass memory information to kernel
+3. **Keyboard Driver**
+   - Implement PS/2 keyboard driver
+   - Handle keyboard interrupts
 
-4. **Keyboard input in Stage 2**
-   - Add BIOS INT 16h wrapper
-   - Simple key waiting function
-   - Boot menu functionality (optional)
+**Completed Goals:**
+- ✅ Implement kernel loading in Stage 2
+- ✅ Add error handling to Stage 2
+- ✅ Protected Mode Transition
+- ✅ Basic VGA text output in Kernel
 
-**Short-term Goals (Basic Kernel):**
-1. Create actual kernel.asm with more functionality
-2. Implement VGA text mode driver (replace BIOS)
-3. Setup Interrupt Descriptor Table (IDT)
-4. Implement keyboard driver (PS/2)
-5. Basic shell/command interpreter
-
-**Medium-term Goals (Protected Mode):**
-1. Setup Global Descriptor Table (GDT)
-2. Enable A20 line
-3. Transition to 32-bit protected mode
-4. Rewrite drivers for protected mode
-5. Implement paging
-6. Basic memory allocator
+**Medium-term Goals:**
+1. Basic shell/command interpreter
+2. File system read support in Kernel
+3. Multitasking support
 
 **Long-term Goals (Real OS Features):**
 1. System calls interface
@@ -2473,54 +2492,36 @@ FAT12 is ideal for learning OS development:
 
 ### Real Mode vs Protected Mode
 
-**Current: 16-bit Real Mode**
+**Bootloader: 16-bit Real Mode**
 
-This OS currently runs in real mode (8086 compatible):
+The bootloader (Stage 1 & 2) runs in real mode (8086 compatible):
 
 **Characteristics:**
 - Segmented memory model: `address = segment × 16 + offset`
 - 1 MB address space (20-bit addressing)
 - Only 640 KB usable (upper 384 KB reserved for hardware)
 - No memory protection (any code can access any memory)
-- No privilege levels (all code runs in Ring 0)
-- Direct hardware access via port I/O
-- BIOS interrupts available
+- BIOS interrupts available (used for disk I/O and screen output)
 
-**Advantages for learning:**
-- Simple to understand
-- Direct hardware control
-- No complex setup required
-- BIOS provides device drivers
-- Easy to debug with QEMU
+**Kernel: 32-bit Protected Mode**
 
-**Disadvantages:**
-- Severe memory limitations
-- No memory protection (crashes can corrupt everything)
-- No multitasking support
-- 16-bit only (slow on modern CPUs)
-- Security vulnerabilities
-
-**Future: 32-bit Protected Mode**
-
-Protected mode enables modern OS features:
+The kernel runs in 32-bit protected mode:
 
 **Characteristics:**
 - Flat memory model: 4 GB address space
 - Memory protection (segments can be read-only, execute-only, etc.)
 - Privilege levels (Ring 0-3): kernel vs user code
 - Virtual memory support (paging)
-- Hardware task switching
 - Interrupt Descriptor Table (IDT) replaces IVT
 
-**Transition process:**
+**Transition process (Implemented in Stage 2):**
 1. Disable interrupts
 2. Load Global Descriptor Table (GDT)
 3. Enable A20 line (access above 1 MB)
 4. Set PE bit in CR0 register
 5. Far jump to 32-bit code segment
 6. Setup new segment registers
-7. Setup IDT for protected mode interrupts
-8. Re-enable interrupts
+7. Jump to Kernel Entry Point
 
 **Future: 64-bit Long Mode**
 
@@ -3512,3 +3513,6 @@ Happy OS development! 🚀
 *Next milestone: Kernel loading and protected mode transition*  
 *Lines of code: ~900 (assembly + C + build system)*  
 *Current binary size: Stage 1: 512 bytes | Stage 2: ~34 bytes (will grow)*
+
+
+//need to update this all after I finish this 🥲
