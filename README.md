@@ -3522,6 +3522,672 @@ project_OS/
 
 ---
 
+## Toolchain and Build System Design
+
+This section explains the choices made for development tools and build system architecture.
+
+### Compiler and Assembler Choices
+
+#### NASM (Netwide Assembler)
+
+**Why NASM over alternatives?**
+
+**NASM vs Other Assemblers:**
+
+| Assembler | Syntax | OS Dev Support | Documentation | Our Choice |
+|-----------|--------|----------------|---------------|------------|
+| NASM | Intel | ✅ Excellent | Extensive | ✅ **Chosen** |
+| GAS (GNU AS) | AT&T | ✅ Good | Good | ❌ Confusing syntax |
+| FASM | Intel | ✅ Excellent | Good | ❌ Less common |
+| YASM | Intel | ✅ Good | Good | ❌ Less active |
+| MASM | Intel | ⚠️ Windows-only | Good | ❌ Not cross-platform |
+
+**NASM Advantages for Our Project:**
+
+1. **Intel Syntax**: More intuitive (`mov dest, src` not `mov src, dest`)
+2. **Multiple Output Formats**: Raw binary, ELF, COFF, etc.
+3. **Excellent Documentation**: Clear manual with examples
+4. **Cross-Platform**: Runs on Linux, Windows, macOS
+5. **Active Development**: Regular updates and bug fixes
+6. **OS Dev Community**: Widely used in OS tutorials
+7. **Macro System**: Powerful preprocessor for code reuse
+
+**Example NASM Features We Use:**
+
+```assembly
+; Conditional compilation
+%ifdef DEBUG
+    mov si, debug_msg
+    call puts
+%endif
+
+; Macros for code reuse
+%macro PRINT_STRING 1
+    mov si, %1
+    call puts
+%endmacro
+
+; Include files
+%include "constants.inc"
+
+; Multiple output formats
+; nasm -f bin boot.asm -o boot.bin    (raw binary)
+; nasm -f elf32 kernel.asm -o kernel.o (Linux object)
+; nasm -f obj stage2.asm -o stage2.obj (Watcom object)
+```
+
+**Why Not GAS?**
+
+GAS (GNU Assembler) uses AT&T syntax which is less intuitive for beginners:
+
+```assembly
+# GAS (AT&T syntax)
+movl $1, %eax          # Move immediate 1 to EAX
+movl %eax, %ebx        # Move EAX to EBX
+
+# NASM (Intel syntax)
+mov eax, 1             ; Move immediate 1 to EAX
+mov ebx, eax           ; Move EAX to EBX
+```
+
+AT&T syntax also has:
+- Size suffixes: `movb`, `movw`, `movl`, `movq`
+- Different immediate prefix: `$` for immediate, `%` for registers
+- Reversed operand order: `instruction source, dest`
+
+**Why Not FASM?**
+
+FASM (Flat Assembler) is excellent but less commonly used in tutorials. NASM has more online resources for learning.
+
+#### Open Watcom C Compiler
+
+**Why Open Watcom for 16-bit Code?**
+
+**Compiler Comparison for 16-bit x86:**
+
+| Compiler | 16-bit Support | Modern | Open Source | Cross-Platform | Our Use |
+|----------|----------------|--------|-------------|----------------|---------|
+| Open Watcom | ✅ Native | ✅ Active | ✅ Yes | ✅ Yes | ✅ **Stage 2** |
+| GCC | ⚠️ Limited (ia16-elf-gcc) | ✅ Active | ✅ Yes | ✅ Yes | ❌ Complex |
+| Turbo C | ✅ Native | ❌ 1990s | ⚠️ Freeware | ❌ DOS only | ❌ Obsolete |
+| Borland C | ✅ Native | ❌ 2000s | ❌ No | ❌ Windows only | ❌ Obsolete |
+| Clang | ❌ No | ✅ Active | ✅ Yes | ✅ Yes | ❌ No 16-bit |
+
+**Open Watcom Advantages:**
+
+1. **Native 16-bit Support**: Designed for real mode programming
+2. **Multiple Memory Models**: Tiny, small, medium, compact, large, huge
+3. **Bare Metal Ready**: Can compile without C runtime (`-zl` flag)
+4. **Excellent Optimizer**: Produces compact code (important for bootloaders)
+5. **Good Documentation**: Clear manual with examples
+6. **Cross-Platform**: Runs on Linux, Windows, macOS
+7. **Active Maintenance**: Community-maintained fork is active
+8. **Multiple Targets**: 16-bit, 32-bit, DOS, OS/2, Windows, QNX
+
+**Memory Models Explained:**
+
+Open Watcom supports 6 memory models for 16-bit code:
+
+| Model | Code | Data | Use Case | Our Use |
+|-------|------|------|----------|---------|
+| Tiny | < 64KB | < 64KB | .COM programs | ❌ Too small |
+| Small | < 64KB | < 64KB | Small programs | ✅ **Stage 2** |
+| Medium | > 64KB | < 64KB | Large code | ❌ Unnecessary |
+| Compact | < 64KB | > 64KB | Large data | ❌ Unnecessary |
+| Large | > 64KB | > 64KB | Both large | ❌ Complex |
+| Huge | > 64KB | > 64KB + huge arrays | Massive programs | ❌ Overkill |
+
+**We Use Small Model (`-ms`):**
+
+```bash
+wcc -4 -d3 -s -wx -ms -zl -zq -fo=output.obj source.c
+```
+
+**Flags Explained:**
+
+- `-4`: Generate 80386 instructions (backwards compatible to 8086)
+- `-d3`: Full debugging info (line numbers, local variables, etc.)
+- `-s`: Remove stack overflow checks (saves ~20 bytes per function)
+- `-wx`: Maximum warning level (catch potential bugs)
+- `-ms`: **Small memory model** (code and data each fit in 64KB)
+- `-zl`: No default libraries (we provide our own functions)
+- `-zq`: Quiet mode (suppress compiler banner)
+
+**Why These Flags?**
+
+- **No Standard Library (`-zl`)**: We're bare metal, no printf/malloc/etc available
+- **Stack Check Removal (`-s`)**: Space-critical, manual stack management
+- **Max Warnings (`-wx`)**: Catch bugs early
+- **Debugging (`-d3`)**: Essential for troubleshooting low-level code
+
+**Alternative: ia16-elf-gcc**
+
+There's a GCC fork that targets 16-bit x86:
+
+```bash
+# ia16-elf-gcc (GCC fork for 16-bit)
+ia16-elf-gcc -march=i8086 -mregparmcall -ffreestanding -nostdlib
+```
+
+**Why Not ia16-elf-gcc?**
+
+- **Less mature**: Newer project, fewer users
+- **Installation complex**: Requires building from source
+- **Less documentation**: Limited OS dev examples
+- **Different calling conventions**: More work to interface with assembly
+
+However, it's a viable alternative for future projects.
+
+#### GCC for 32-bit Kernel
+
+**Why GCC for Protected Mode Kernel?**
+
+Once we transition to 32-bit protected mode, we switch to GCC:
+
+```bash
+gcc -m32 -ffreestanding -nostdlib -c kernel.c -o kernel.o
+```
+
+**GCC Advantages for 32-bit:**
+
+1. **Industry Standard**: Most OS dev tutorials use GCC
+2. **Excellent Optimization**: `-O2`, `-Os` produce efficient code
+3. **Inline Assembly**: Easy to mix C and assembly
+4. **Cross-Compilation**: Can target any architecture
+5. **Debugging Support**: Works great with GDB
+6. **Extensive Documentation**: Massive community knowledge base
+
+**GCC Flags for Kernel:**
+
+```bash
+gcc -m32                    # Target 32-bit (even on 64-bit host)
+    -ffreestanding          # Freestanding environment (no hosted)
+    -nostdlib               # Don't link with standard library
+    -nostartfiles           # Don't use standard startup files
+    -nodefaultlibs          # Don't use default libraries
+    -fno-builtin            # Don't use builtin functions
+    -fno-stack-protector    # No stack canary (we control stack)
+    -fno-pie                # No Position Independent Executable
+    -O2                     # Optimize for speed
+    -Wall -Wextra           # All warnings
+    -c                      # Compile only (don't link)
+    kernel.c -o kernel.o
+```
+
+**Why These Flags?**
+
+- **Freestanding (`-ffreestanding`)**: Tell GCC we're bare metal
+- **No Standard Library (`-nostdlib`)**: We provide our own
+- **No Builtin Functions (`-fno-builtin`)**: Don't assume strlen/memcpy/etc exist
+- **No Stack Protector (`-fno-stack-protector`)**: Requires runtime support we don't have
+- **32-bit (`-m32`)**: Even on 64-bit host, compile for 32-bit
+
+**Linker (ld) for Kernel:**
+
+```bash
+ld -m elf_i386                      # 32-bit ELF
+   -T linker.ld                     # Custom linker script
+   -o kernel.bin                    # Output file
+   entry.o kernel.o                 # Input objects
+```
+
+**Custom Linker Script (`linker.ld`):**
+
+```ld
+ENTRY(_start)
+OUTPUT_FORMAT(binary)
+
+SECTIONS
+{
+    . = 0x100000;                   /* Kernel at 1MB mark */
+    
+    .entry : ALIGN(16) {
+        *(.entry)                   /* Entry point first */
+    }
+    
+    .text : ALIGN(16) {
+        *(.text)                    /* Code */
+    }
+    
+    .rodata : ALIGN(16) {
+        *(.rodata)                  /* Read-only data */
+    }
+    
+    .data : ALIGN(16) {
+        *(.data)                    /* Initialized data */
+    }
+    
+    .bss : ALIGN(16) {
+        *(COMMON)
+        *(.bss)                     /* Uninitialized data */
+    }
+}
+```
+
+**Why Custom Linker Script?**
+
+Default linker script creates ELF executable with headers. We need:
+1. Raw binary format (no ELF headers)
+2. Specific load address (1MB)
+3. Entry point first (`.entry` section)
+4. Aligned sections (performance)
+
+### Build System Architecture
+
+#### Modular Makefile Design
+
+**Why Modular Makefiles?**
+
+Instead of one giant Makefile, we use a hierarchical system:
+
+```
+Makefile (root)
+├── src/bootloader/stage1/Makefile
+├── src/bootloader/stage2/Makefile
+└── src/kernel/Makefile
+```
+
+**Benefits:**
+
+1. **Separation of Concerns**: Each component builds independently
+2. **Parallel Builds**: `make -j4` can build stages simultaneously
+3. **Easier Maintenance**: Changes to kernel don't affect bootloader builds
+4. **Reusability**: Can build just one component: `cd src/kernel && make`
+5. **Clarity**: Each Makefile is small and focused
+
+**Root Makefile:**
+
+```makefile
+# High-level orchestration
+.PHONY: all clean stage1 stage2 kernel floppy_image
+
+all: floppy_image
+
+floppy_image: stage1 stage2 kernel
+	dd if=/dev/zero of=$(BUILD_DIR)/main_floppy.img bs=512 count=2880
+	mkfs.fat -F 12 -n "NBOS" $(BUILD_DIR)/main_floppy.img
+	dd if=$(BUILD_DIR)/stage1.bin of=$(BUILD_DIR)/main_floppy.img conv=notrunc
+	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/stage2.bin "::/stage2.bin"
+	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/kernel.bin "::/kernel.bin"
+
+stage1:
+	$(MAKE) -C src/bootloader/stage1 BUILD_DIR=$(abspath $(BUILD_DIR))
+
+stage2:
+	$(MAKE) -C src/bootloader/stage2 BUILD_DIR=$(abspath $(BUILD_DIR))
+
+kernel:
+	$(MAKE) -C src/kernel BUILD_DIR=$(abspath $(BUILD_DIR))
+
+clean:
+	rm -rf $(BUILD_DIR)
+```
+
+**Component Makefile (Example: stage2/Makefile):**
+
+```makefile
+BUILD_DIR ?= $(abspath build)
+
+ASM := nasm
+CC := wcc
+LD := wlink
+
+SOURCES_C := $(wildcard *.c)
+SOURCES_ASM := $(wildcard *.asm)
+
+OBJECTS_C := $(patsubst %.c,$(BUILD_DIR)/stage2/c/%.obj,$(SOURCES_C))
+OBJECTS_ASM := $(patsubst %.asm,$(BUILD_DIR)/stage2/asm/%.obj,$(SOURCES_ASM))
+
+all: $(BUILD_DIR)/stage2.bin
+
+$(BUILD_DIR)/stage2.bin: $(OBJECTS_ASM) $(OBJECTS_C)
+	$(LD) NAME $@ FILE { $^ } @linker.lnk
+
+$(BUILD_DIR)/stage2/c/%.obj: %.c
+	@mkdir -p $(dir $@)
+	$(CC) -4 -d3 -s -wx -ms -zl -zq -fo=$@ $<
+
+$(BUILD_DIR)/stage2/asm/%.obj: %.asm
+	@mkdir -p $(dir $@)
+	$(ASM) -f obj -o $@ $<
+
+clean:
+	rm -f $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/stage2/**/*.obj
+```
+
+**Key Make Features We Use:**
+
+1. **Pattern Rules**: `%.obj: %.c` matches any .c file
+2. **Automatic Variables**: 
+   - `$@` = target name
+   - `$<` = first prerequisite
+   - `$^` = all prerequisites
+3. **Wildcard**: `$(wildcard *.c)` finds all .c files
+4. **Path Substitution**: `$(patsubst %.c,%.obj,$(SOURCES))` changes extensions
+5. **Directory Creation**: `@mkdir -p $(dir $@)` creates output dirs
+6. **Subdirectory Makes**: `$(MAKE) -C subdir` builds in subdirectory
+7. **Variable Override**: `BUILD_DIR ?= build` allows parent override
+
+#### Disk Image Creation
+
+**Why FAT12 Floppy Image?**
+
+We create a 1.44MB FAT12 floppy image because:
+
+1. **Universal Compatibility**: Works in QEMU, VirtualBox, VMware, real hardware
+2. **Simple to Create**: Standard tools (dd, mkfs.fat, mcopy)
+3. **Easy to Debug**: Can mount on host OS to inspect
+4. **Historical**: Matches early PC boot process
+
+**Image Creation Steps:**
+
+```bash
+# 1. Create blank 1.44MB image (2880 sectors × 512 bytes)
+dd if=/dev/zero of=floppy.img bs=512 count=2880
+
+# 2. Format as FAT12 filesystem
+mkfs.fat -F 12 -n "NBOS" floppy.img
+
+# 3. Install bootloader as boot sector
+dd if=stage1.bin of=floppy.img conv=notrunc
+
+# 4. Copy files to filesystem
+mcopy -i floppy.img stage2.bin ::/stage2.bin
+mcopy -i floppy.img kernel.bin ::/kernel.bin
+mcopy -i floppy.img test.txt ::/test.txt
+```
+
+**Tool Explanations:**
+
+- **dd**: "Data Duplicator" - low-level copy tool
+  - `if=/dev/zero`: Input from null device (creates zeros)
+  - `of=floppy.img`: Output to file
+  - `bs=512`: Block size 512 bytes
+  - `count=2880`: Copy 2880 blocks (1.44MB)
+  - `conv=notrunc`: Don't truncate output (preserve FAT12 formatting)
+
+- **mkfs.fat**: Create FAT filesystem
+  - `-F 12`: FAT12 type
+  - `-n "NBOS"`: Volume label
+
+- **mcopy**: "MTOOLS copy" - copy files to/from FAT images
+  - `-i floppy.img`: Image file to operate on
+  - `stage2.bin`: Source file (host filesystem)
+  - `::/stage2.bin`: Destination (image root directory)
+  - Can also use: `mdir`, `mdel`, `mtype`, `mmd`, etc.
+
+**Alternative: Hard Disk Image**
+
+Could use hard disk image instead:
+
+```bash
+# Create 10MB hard disk image
+dd if=/dev/zero of=hdd.img bs=1M count=10
+
+# Create partition table
+fdisk hdd.img <<EOF
+n
+p
+1
+
+
+a
+w
+EOF
+
+# Format partition
+mkfs.fat -F 16 hdd.img
+
+# Would also need MBR bootloader (more complex)
+```
+
+**Why Floppy for Learning:**
+
+- **Simpler**: No partition table, no MBR vs VBR distinction
+- **Smaller**: Faster to create and test
+- **Historical**: Matches original PC boot process
+- **Universal**: Every emulator supports floppy
+
+#### Alternative Build Systems
+
+**1. CMake**
+
+*Modern cross-platform build system*
+
+```cmake
+cmake_minimum_required(VERSION 3.10)
+project(project_OS ASM C)
+
+add_executable(stage1.bin src/bootloader/stage1/boot.asm)
+set_target_properties(stage1.bin PROPERTIES
+    LINK_FLAGS "-f bin"
+)
+```
+
+**Pros:**
+- Cross-platform (Windows, Linux, macOS)
+- IDE integration (Visual Studio, CLion)
+- Dependency tracking
+- Out-of-source builds
+
+**Cons:**
+- More complex for simple projects
+- Learning curve
+- Overkill for our use case
+
+**Our choice:** Make is sufficient and more traditional for OS dev
+
+**2. Custom Build Scripts**
+
+*Shell scripts instead of Make*
+
+```bash
+#!/bin/bash
+nasm -f bin src/bootloader/stage1/boot.asm -o build/stage1.bin
+nasm -f obj src/bootloader/stage2/main.asm -o build/main.obj
+wcc -4 -d3 -s -wx -ms -zl -zq -fo=build/main.obj src/bootloader/stage2/main.c
+# ... etc
+```
+
+**Pros:**
+- Simple, easy to understand
+- No Make knowledge required
+- Complete control
+
+**Cons:**
+- No dependency tracking (always rebuilds everything)
+- No parallel builds
+- Platform-specific (bash vs cmd.exe)
+
+**Our choice:** Make provides dependency tracking and parallel builds
+
+**3. Build System Generators (Meson, Bazel, etc.)**
+
+*Modern alternatives to Make*
+
+**Pros:**
+- Faster builds
+- Better dependency tracking
+- Modern features
+
+**Cons:**
+- Not standard for OS development
+- Less documentation/examples
+- Additional dependencies
+
+**Our choice:** Make is standard in OS dev community
+
+### Testing and Debugging Infrastructure
+
+#### Emulators for Testing
+
+**QEMU - Primary Testing Environment**
+
+```bash
+# Basic boot test
+qemu-system-i386 -fda build/main_floppy.img
+
+# With GDB debugging
+qemu-system-i386 -fda build/main_floppy.img -s -S
+
+# With logging
+qemu-system-i386 -fda build/main_floppy.img \
+    -d int,cpu_reset,guest_errors \
+    -D qemu_log.txt
+```
+
+**QEMU Advantages:**
+
+- **Fast**: Boots instantly
+- **Debuggable**: Built-in GDB stub
+- **Feature-rich**: Monitor console for inspection
+- **Cross-platform**: Windows, Linux, macOS
+- **Free**: Open source
+
+**VirtualBox - Secondary Testing**
+
+```bash
+# Create VM
+VBoxManage createvm --name "project_OS" --register
+VBoxManage modifyvm "project_OS" --memory 128 --boot1 floppy
+VBoxManage storagectl "project_OS" --name "Floppy" --add floppy
+VBoxManage storageattach "project_OS" --storagectl "Floppy" \
+    --port 0 --device 0 --type fdd \
+    --medium build/main_floppy.img
+```
+
+**VirtualBox Advantages:**
+
+- **Realistic**: Closer to real hardware
+- **GUI**: Easy to use
+- **Snapshots**: Can save/restore states
+
+**Bochs - Advanced Debugging**
+
+```bash
+# Bochs with debugger
+bochs -f bochsrc.txt -q
+```
+
+**Bochs Advantages:**
+
+- **Best Debugger**: Built-in instruction-level debugger
+- **Inspection**: Can examine all CPU state
+- **Breakpoints**: Hardware and software breakpoints
+
+**Why Test in Multiple Emulators?**
+
+Different emulators have different quirks:
+- QEMU: Sometimes too forgiving
+- VirtualBox: More realistic CPU behavior
+- Bochs: Strict, catches more bugs
+
+Testing in all three ensures compatibility.
+
+#### Debugging Tools
+
+**1. GDB with QEMU**
+
+```bash
+# Terminal 1: Start QEMU with GDB server
+qemu-system-i386 -fda build/main_floppy.img -s -S
+
+# Terminal 2: Connect GDB
+gdb
+(gdb) target remote localhost:1234
+(gdb) set architecture i8086
+(gdb) break *0x7c00
+(gdb) continue
+(gdb) info registers
+(gdb) x/32xb 0x7c00
+```
+
+**2. Hexdump for Binary Inspection**
+
+```bash
+# View boot sector
+hexdump -C build/stage1.bin | head -n 32
+
+# Check boot signature (last 2 bytes should be 55 AA)
+tail -c 2 build/stage1.bin | hexdump -C
+```
+
+**3. Objdump for Disassembly**
+
+```bash
+# Disassemble 32-bit kernel
+objdump -D -b binary -m i386 -M intel build/kernel.bin | less
+
+# Disassemble ELF object
+objdump -d build/kernel.o
+```
+
+**4. MTOOLS for Filesystem Inspection**
+
+```bash
+# List files in image
+mdir -i build/main_floppy.img ::/
+
+# View file contents
+mtype -i build/main_floppy.img ::/test.txt
+
+# Extract file from image
+mcopy -i build/main_floppy.img ::/stage2.bin ./extracted.bin
+
+# Filesystem info
+minfo -i build/main_floppy.img
+```
+
+**5. strace/ltrace for Tool Debugging**
+
+```bash
+# Trace system calls made by build tools
+strace -e open,read,write wcc main.c
+
+# Trace library calls
+ltrace wlink NAME stage2.bin FILE main.obj
+```
+
+### Build Performance Optimization
+
+**Current Build Times (Approximate):**
+
+```
+Component         Time      Size Output
+=============================================
+Stage 1          0.1s      512 B
+Stage 2 (asm)    0.1s      ~100 B
+Stage 2 (C)      0.3s      ~2 KB
+Stage 2 (link)   0.2s      ~2 KB total
+Kernel (asm)     0.1s      ~50 B
+Kernel (C)       0.4s      ~1 KB
+Kernel (link)    0.2s      ~1 KB total
+Disk image       0.5s      1.44 MB
+Total (clean)    ~2s
+Total (incremental) ~0.5s
+```
+
+**Optimization Strategies:**
+
+1. **Parallel Builds**: `make -j4` (4 jobs)
+2. **Incremental Builds**: Only rebuild changed files
+3. **Separate Objects**: Compile each .c file separately
+4. **Build Directory**: All outputs in build/, source unchanged
+5. **Dependency Tracking**: Make knows what needs rebuilding
+
+**Scaling for Larger Projects:**
+
+As project grows, build time management becomes critical:
+
+- **Precompiled Headers**: Not applicable (bare metal)
+- **Unity Builds**: Could combine .c files (trades compile time for link time)
+- **Distributed Builds**: distcc for very large projects
+- **ccache**: Compiler cache (helps with clean builds)
+
+For now, build is fast enough that optimization isn't needed.
+
+---
+
 ## Technical Details
 
 ### Current Project Status
