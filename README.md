@@ -25,8 +25,14 @@ Hello world from kernel!
 
 ## Table of Contents
 1. [Project Overview](#project-overview)
-2. [System Architecture](#system-architecture)
-3. [Detailed Component Breakdown](#detailed-component-breakdown)
+2. [Operating System Fundamentals: Theory vs Implementation](#operating-system-fundamentals-theory-vs-implementation)
+   - [Boot Process: How OSes Start](#boot-process-how-oses-start)
+   - [Memory Management Approaches](#memory-management-approaches)
+   - [Filesystem Design Choices](#filesystem-design-choices)
+   - [CPU Modes and Privilege Levels](#cpu-modes-and-privilege-levels)
+   - [Interrupt Handling Strategies](#interrupt-handling-strategies)
+3. [System Architecture](#system-architecture)
+4. [Detailed Component Breakdown](#detailed-component-breakdown)
    - [Stage 1 Bootloader (boot.asm)](#stage-1-bootloader-bootasm)
    - [Stage 2 Bootloader (main.asm + main.c)](#stage-2-bootloader-mainasm--mainc)
    - [C Standard Library Components](#c-standard-library-components)
@@ -34,9 +40,9 @@ Hello world from kernel!
    - [Kernel (main.asm)](#kernel-mainasm)
    - [FAT12 Utility (fat.c)](#fat12-utility-fatc)
    - [Build System (Makefile)](#build-system-makefile)
-4. [How Everything Works Together](#how-everything-works-together)
-5. [Building and Running](#building-and-running)
-6. [Technical Details](#technical-details)
+5. [How Everything Works Together](#how-everything-works-together)
+6. [Building and Running](#building-and-running)
+7. [Technical Details](#technical-details)
 
 ---
 
@@ -62,6 +68,1153 @@ The BIOS boot sector is limited to 512 bytes, which is insufficient for complex 
 2. **Stage 2 (unlimited size)**: Full-featured bootloader written in C that can perform complex initialization, display messages, load drivers, etc.
 
 This architecture is used by real-world bootloaders like GRUB and Windows Boot Manager.
+
+---
+
+## Operating System Fundamentals: Theory vs Implementation
+
+This section provides a deep dive into how operating systems work in general, how this OS implements these concepts, and what alternative approaches exist.
+
+### Boot Process: How OSes Start
+
+#### General OS Boot Theory
+
+All operating systems must bootstrap themselves from power-on to a running state. This process is standardized on x86 systems:
+
+**The Universal Boot Sequence:**
+
+1. **Power-On Self Test (POST)**: Hardware initialization by firmware
+2. **Firmware Stage**: BIOS/UEFI locates boot device
+3. **Boot Sector Loading**: First sector loaded at fixed memory location
+4. **Bootloader Execution**: Minimal code that loads the full bootloader
+5. **OS Loader**: Full-featured loader that prepares the OS kernel
+6. **Kernel Initialization**: OS kernel starts, initializes subsystems
+7. **Init Process**: First user-space process starts (systemd, init, etc.)
+
+**Why Multiple Stages?**
+
+Operating systems universally use multi-stage bootloaders due to space constraints:
+
+- **BIOS Boot Sector**: 512 bytes (446 bytes code + 64 bytes partition table + 2 bytes signature)
+- **UEFI Boot**: Uses FAT32 filesystem, allows larger bootloaders
+- **Physical Limitations**: Early PC hardware couldn't load more than 512 bytes initially
+
+#### Our Implementation: Two-Stage Bootloader
+
+**Stage 1 - Minimal FAT12 Loader (512 bytes)**
+
+Located in `src/bootloader/stage1/boot.asm`, this is our equivalent to the Master Boot Record (MBR):
+
+```assembly
+org 0x7C00              ; BIOS loads us here
+bits 16                 ; 16-bit real mode
+
+; FAT12 BPB (BIOS Parameter Block)
+; Must appear at specific offsets for filesystem compatibility
+```
+
+**What Stage 1 Does:**
+1. Initialize segment registers (CS, DS, ES, SS)
+2. Set up stack pointer at 0x7C00 (grows downward)
+3. Detect disk geometry using BIOS INT 13h, AH=08h
+4. Parse FAT12 filesystem structures:
+   - Boot sector → FAT tables → Root directory → Data area
+5. Search for `STAGE2.BIN` in root directory
+6. Follow FAT12 cluster chain to load entire file
+7. Load Stage 2 at 0x0500 (safe memory region)
+8. Jump to Stage 2 entry point
+
+**Why 0x0500?**
+- 0x0000-0x04FF: BIOS Data Area (BDA) and Interrupt Vector Table (IVT)
+- 0x0500-0x7BFF: Free conventional memory (~30 KB available)
+- 0x7C00-0x7DFF: Our Stage 1 bootloader
+- 0x7E00-0x9FFFF: More free memory
+
+**Stage 2 - Full-Featured C Bootloader (Unlimited Size)**
+
+Located in `src/bootloader/stage2/`, this stage is written in C with assembly glue code:
+
+```c
+// main.c entry point
+void _cdecl cstart_(uint16_t bootDrive)
+{
+    // Initialize disk subsystem
+    DISK_Initialize(bootDrive);
+    
+    // Initialize FAT filesystem
+    if (!FAT_Initialize(&g_Disk)) {
+        // Error handling
+    }
+    
+    // Load kernel.bin from filesystem
+    FAR_PTR kernelBuffer = FAT_Open(&g_RootDir, "/kernel.bin");
+    
+    // Switch to protected mode
+    i386_EnterProtectedMode();
+    
+    // Jump to kernel at 1MB mark (0x100000)
+    void (*kernelStart)() = (void(*)())0x100000;
+    kernelStart();
+}
+```
+
+**What Stage 2 Does:**
+1. Re-initialize segment registers for C environment
+2. Set up proper stack frame for C function calls
+3. Initialize disk I/O subsystem with BIOS INT 13h wrappers
+4. Initialize FAT12 filesystem driver
+5. Load kernel.bin from filesystem
+6. Prepare for protected mode:
+   - Enable A20 line (access memory above 1MB)
+   - Set up Global Descriptor Table (GDT)
+   - Configure segment descriptors
+7. Switch CPU to 32-bit protected mode
+8. Jump to kernel entry point at 1MB
+
+#### Alternative Boot Approaches
+
+**1. Single-Stage Bootloader**
+
+*How it works:* Everything in 512 bytes
+- **Pros**: Simpler, no multi-stage complexity
+- **Cons**: Extremely limited (no complex filesystems, minimal error handling)
+- **Used by**: Very simple embedded systems, DOS boot sector viruses
+- **Our choice**: Rejected due to feature limitations
+
+**2. Three+ Stage Bootloader**
+
+*How it works:* Stage 1 → Stage 1.5 → Stage 2 → Kernel
+- **Pros**: More modular, stage 1.5 can fit between MBR and first partition
+- **Cons**: More complexity, more loading time
+- **Used by**: GRUB Legacy (had stage 1.5 for filesystem drivers)
+- **Our choice**: Unnecessary complexity for learning project
+
+**3. UEFI Boot**
+
+*How it works:* Firmware loads .efi executable from FAT32 ESP (EFI System Partition)
+- **Pros**: 
+  - No 512-byte limit
+  - Built-in filesystem support
+  - Graphics before OS loads
+  - Secure Boot support
+- **Cons**:
+  - More complex API
+  - Requires UEFI firmware (not available on all hardware/emulators)
+  - PE/COFF executable format required
+- **Used by**: Modern operating systems (Windows 8+, modern Linux)
+- **Our choice**: BIOS mode chosen for broader compatibility and simpler learning
+
+**4. Network Boot (PXE)**
+
+*How it works:* Firmware loads bootloader over network
+- **Pros**: No local storage needed, centralized OS management
+- **Cons**: Requires network infrastructure, slower boot
+- **Used by**: Diskless workstations, cloud VMs, PXE boot environments
+- **Our choice**: Not applicable for a learning OS project
+
+**Comparison Table:**
+
+| Approach | Complexity | Size Limit | Hardware Support | Our Use |
+|----------|------------|------------|------------------|---------|
+| Single-stage | Low | 446 bytes | Universal | ❌ Too limited |
+| Two-stage (Ours) | Medium | Stage 2 unlimited | Universal | ✅ **Chosen** |
+| Three-stage | High | Each stage unlimited | Universal | ❌ Unnecessary |
+| UEFI | Very High | No limit | Modern systems only | ❌ Too complex |
+| PXE | High | No limit | Network required | ❌ Not applicable |
+
+---
+
+### Memory Management Approaches
+
+#### General Memory Management Theory
+
+Operating systems must manage physical memory and provide abstractions for programs. Key concepts:
+
+**1. Segmentation**
+
+Memory divided into logical segments (code, data, stack):
+- Each segment has base address and limit
+- Provides basic protection (code vs data separation)
+- Used heavily in x86 real mode and protected mode
+
+**2. Paging**
+
+Memory divided into fixed-size pages (typically 4KB):
+- Virtual addresses mapped to physical addresses
+- Enables virtual memory (swap to disk)
+- Provides fine-grained protection
+- Allows memory isolation between processes
+
+**3. Memory Protection Rings**
+
+x86 defines 4 privilege levels (rings 0-3):
+- **Ring 0**: Kernel mode (full hardware access)
+- **Ring 1-2**: Device drivers (rarely used)
+- **Ring 3**: User mode (restricted access)
+
+#### Our Implementation
+
+**Real Mode (16-bit) - Bootloader**
+
+In real mode, memory is accessed using segment:offset addressing:
+
+```
+Physical Address = (Segment × 16) + Offset
+```
+
+Example:
+```
+0x07C0:0x0000 = 0x07C00 (bootloader location)
+0x0000:0x0500 = 0x00500 (stage 2 location)
+0x2000:0x0000 = 0x20000 (old kernel location)
+```
+
+**Our Memory Map in Real Mode:**
+
+```text
+0x00000-0x003FF   1 KB     Interrupt Vector Table (IVT)
+0x00400-0x004FF   256 B    BIOS Data Area (BDA)
+0x00500-0x07BFF   ~30 KB   Stage 2 bootloader (loaded here)
+0x07C00-0x07DFF   512 B    Stage 1 bootloader (BIOS loads here)
+0x07E00-0x9FFFF   ~600 KB  Free conventional memory
+0xA0000-0xBFFFF   128 KB   Video memory (VGA)
+0xC0000-0xFFFFF   256 KB   ROM BIOS and adapters
+```
+
+**Why These Addresses?**
+
+- **0x7C00**: IBM PC BIOS standard from 1981 (historical, provides 30KB stack below)
+- **0x0500**: First safe address after BDA, allows ~30KB for Stage 2
+- **0x100000**: 1MB mark, first address accessible in protected mode without A20 issues
+
+**Protected Mode (32-bit) - Kernel**
+
+Our kernel runs in 32-bit protected mode with flat memory model:
+
+```c
+// entry.asm - Kernel entry point
+bits 32
+_start:
+    mov esp, 0x200000    ; Stack at 2MB mark
+    mov ebp, esp
+    call start           ; Jump to C kernel
+```
+
+**Protected Mode Memory Map:**
+
+```text
+0x00000000-0x000FFFFF   1 MB      Real mode area (legacy)
+0x00100000-0x001FFFFF   1 MB      Kernel code and data
+0x00200000-0x003FFFFF   2 MB      Kernel stack
+0x00400000+             Rest      Future: User programs, heap, etc.
+```
+
+**GDT (Global Descriptor Table) Configuration:**
+
+We set up a simple flat memory model:
+
+```c
+// Simplified GDT setup in stage2/main.c
+struct GDTEntry {
+    uint16_t limit_low;
+    uint16_t base_low;
+    uint8_t base_mid;
+    uint8_t access;       // Present, Ring 0/3, Code/Data
+    uint8_t granularity;  // 4KB pages, 32-bit
+    uint8_t base_high;
+} __attribute__((packed));
+
+GDTEntry gdt[3] = {
+    {0, 0, 0, 0x00, 0x00, 0},         // Null descriptor (required)
+    {0xFFFF, 0, 0, 0x9A, 0xCF, 0},   // Code segment (0x08)
+    {0xFFFF, 0, 0, 0x92, 0xCF, 0}    // Data segment (0x10)
+};
+```
+
+**Segment Descriptors Explained:**
+
+- **Limit**: 0xFFFF with 4KB granularity = 4GB (entire 32-bit address space)
+- **Base**: 0x00000000 (flat model starts at 0)
+- **Access byte (0x9A for code)**:
+  - Present bit = 1 (segment is valid)
+  - Privilege level = 00 (ring 0, kernel mode)
+  - Descriptor type = 1 (code/data segment)
+  - Executable = 1, Readable = 1
+- **Granularity (0xCF)**:
+  - Granularity = 1 (4KB pages)
+  - Size = 1 (32-bit mode)
+  - Limit high = 0xF
+
+#### Alternative Memory Management Approaches
+
+**1. Single Address Space OS**
+
+*How it works:* All processes share same address space
+- **Pros**: Fast context switching, easy IPC
+- **Cons**: No memory protection, one crash kills everything
+- **Used by**: Early Mac OS, AmigaOS, some embedded RTOS
+- **Our choice**: Too dangerous for learning, no protection
+
+**2. Segmented Memory Model**
+
+*How it works:* Programs use logical segments (code, data, stack, heap)
+- **Pros**: Natural program organization, coarse-grained protection
+- **Cons**: Fragmentation, complex to manage, limited by segment size
+- **Used by**: x86 real mode, OS/2, early Windows
+- **Our choice**: Used in real mode (required), but transitioning away
+
+**3. Flat Memory with Paging (Modern Approach)**
+
+*How it works:* Single 4GB virtual address space per process, paged to physical RAM
+- **Pros**: 
+  - Simple programming model
+  - Fine-grained protection (4KB pages)
+  - Virtual memory support (swap)
+  - Memory isolation between processes
+- **Cons**: 
+  - More complex to implement
+  - TLB misses cost performance
+  - Requires hardware support (MMU)
+- **Used by**: Linux, Windows NT+, macOS, modern BSDs
+- **Our future plan**: Will implement paging after protected mode is stable
+
+**4. 64-bit Virtual Memory**
+
+*How it works:* 48-bit virtual addresses (256TB address space)
+- **Pros**: Massive address space, NX bit, simpler than PAE
+- **Cons**: Requires 64-bit CPU, more complex page tables
+- **Used by**: Modern Linux, Windows 10+, all modern desktop OSes
+- **Our future plan**: Long-term goal after 32-bit is working
+
+**Memory Model Comparison:**
+
+| Model | Address Space | Protection | Complexity | Performance | Our Use |
+|-------|---------------|------------|------------|-------------|---------|
+| Real Mode (segmented) | 1 MB | None | Low | Fast | ✅ Bootloader |
+| Protected Mode (flat) | 4 GB | Basic | Medium | Fast | ✅ Current kernel |
+| Protected Mode (paging) | 4 GB virtual | Fine-grained | High | Medium | 🔄 Future |
+| 64-bit Long Mode | 256 TB | Fine-grained + NX | Very High | Medium | ⭐ Long-term |
+
+**Our Rationale:**
+
+We start with segmentation (required in real mode), move to flat protected mode (simpler), and will eventually implement paging (necessary for real OS features).
+
+---
+
+### Filesystem Design Choices
+
+#### General Filesystem Theory
+
+Filesystems organize data on storage devices. Key concepts:
+
+**1. Filesystem Components**
+
+- **Superblock/Boot Sector**: Metadata about the filesystem
+- **Allocation Table**: Tracks which blocks are used/free
+- **Directory Structure**: Organizes files into hierarchy
+- **Data Blocks**: Actual file content
+- **Metadata**: File size, timestamps, permissions
+
+**2. Allocation Strategies**
+
+- **Contiguous**: Files stored in consecutive blocks (fast, but fragments)
+- **Linked**: Each block points to next (no fragmentation, slow random access)
+- **Indexed**: Index block points to all data blocks (fast, flexible)
+- **Extent-based**: Contiguous runs with metadata (modern approach)
+
+**3. Directory Structures**
+
+- **Flat**: All files in one directory (simple, doesn't scale)
+- **Hierarchical**: Tree of directories (universally used today)
+- **B-tree based**: Efficient for large directories (NTFS, ext4)
+
+#### Our Implementation: FAT12
+
+We chose FAT12 (File Allocation Table, 12-bit) for its simplicity:
+
+**FAT12 Structure:**
+
+```text
+[Boot Sector][FAT 1][FAT 2][Root Directory][Data Area]
+     512B      9×512B  9×512B     14×512B      Rest
+```
+
+**Why Two FAT Copies?**
+
+Redundancy! If FAT 1 gets corrupted, FAT 2 can recover the filesystem.
+
+**Boot Sector Layout:**
+
+```c
+// Simplified BPB (BIOS Parameter Block)
+struct BootSector {
+    uint8_t  jmp[3];              // Jump instruction (EB 3C 90)
+    char     oem[8];              // "MSWIN4.1"
+    uint16_t bytes_per_sector;    // 512
+    uint8_t  sectors_per_cluster; // 1 (for floppy)
+    uint16_t reserved_sectors;    // 1 (boot sector itself)
+    uint8_t  fat_count;           // 2 (redundancy)
+    uint16_t root_entries;        // 224 (14 sectors)
+    uint16_t total_sectors;       // 2880 (1.44MB)
+    uint8_t  media_type;          // 0xF0 (floppy)
+    uint16_t sectors_per_fat;     // 9
+    // ... more fields
+    uint16_t signature;           // 0xAA55 (bootable marker)
+} __attribute__((packed));
+```
+
+**FAT12 Cluster Chain:**
+
+Files are stored as linked lists of clusters:
+
+```
+File: "README.TXT" (5KB)
+Clusters: 2 -> 3 -> 4 -> 5 -> 6 -> 7 -> 8 -> 9 -> 10 -> 0xFFF (EOF)
+```
+
+**How FAT Entries Work:**
+
+FAT12 uses 12 bits per entry, so entries are packed:
+
+```
+Byte 0:    [Entry 0 low 8 bits]
+Byte 1:    [Entry 1 low 4][Entry 0 high 4]
+Byte 2:    [Entry 1 high 8 bits]
+Byte 3:    [Entry 2 low 8 bits]
+...
+```
+
+**Special FAT12 Values:**
+
+- `0x000`: Free cluster
+- `0x001`: Reserved
+- `0x002-0xFF6`: Valid cluster numbers
+- `0xFF7`: Bad cluster
+- `0xFF8-0xFFF`: End of file
+
+**Our FAT12 Implementation:**
+
+Stage 1 (assembly):
+```assembly
+; Calculate FAT index
+mov ax, [current_cluster]
+mov cx, 3
+mul cx              ; AX = cluster * 3
+mov cx, 2
+div cx              ; AX = (cluster * 3) / 2, DX = remainder
+
+; Load 16 bits from FAT
+mov si, fat_buffer
+add si, ax
+mov ax, [si]
+
+; Extract 12-bit value
+test dx, dx         ; Check if even or odd
+jz .even
+    shr ax, 4       ; Odd cluster: shift right 4 bits
+    jmp .next
+.even:
+    and ax, 0x0FFF  ; Even cluster: mask to 12 bits
+.next:
+```
+
+Stage 2 (C):
+```c
+uint16_t FAT_NextCluster(uint16_t cluster) {
+    uint32_t fat_index = (cluster * 3) / 2;
+    uint16_t value;
+    
+    if (cluster % 2 == 0) {
+        // Even cluster: low 12 bits
+        value = *(uint16_t*)(&g_FAT[fat_index]) & 0x0FFF;
+    } else {
+        // Odd cluster: high 12 bits
+        value = *(uint16_t*)(&g_FAT[fat_index]) >> 4;
+    }
+    
+    return value;
+}
+```
+
+**Directory Entry Structure:**
+
+Each file has a 32-byte directory entry:
+
+```c
+struct DirectoryEntry {
+    char     name[11];          // 8.3 format (KERNEL  BIN)
+    uint8_t  attributes;        // Archive, hidden, system, etc.
+    uint8_t  reserved;
+    uint8_t  creation_time_ms;
+    uint16_t creation_time;
+    uint16_t creation_date;
+    uint16_t access_date;
+    uint16_t cluster_high;      // High word (FAT32, 0 for FAT12)
+    uint16_t modified_time;
+    uint16_t modified_date;
+    uint16_t cluster_low;       // First cluster
+    uint32_t size;              // File size in bytes
+} __attribute__((packed));
+```
+
+**Finding a File:**
+
+```c
+// Search root directory for filename
+for (int i = 0; i < 224; i++) {
+    if (memcmp(rootdir[i].name, "KERNEL  BIN", 11) == 0) {
+        // Found! Start reading from cluster_low
+        uint16_t cluster = rootdir[i].cluster_low;
+        // Follow cluster chain...
+    }
+}
+```
+
+#### Alternative Filesystem Approaches
+
+**1. FAT16/FAT32**
+
+*How it works:* Similar to FAT12, but 16-bit or 32-bit cluster addresses
+- **Pros**: Larger disks (FAT16: 2GB, FAT32: 2TB), widely compatible
+- **Cons**: More complex, larger FAT tables, no journaling
+- **Used by**: USB drives, SD cards, digital cameras
+- **Our choice**: FAT12 simpler for learning, sufficient for 1.44MB floppy
+
+**2. ext2/ext3/ext4 (Linux Filesystems)**
+
+*How it works:* Inode-based with block groups
+- **Pros**: 
+  - Fast (optimized for hard drives)
+  - Permissions and ownership
+  - Journaling (ext3/ext4)
+  - Large file support
+- **Cons**: 
+  - Complex to implement
+  - Linux-centric
+  - Requires permission system
+- **Used by**: Most Linux systems
+- **Our future**: Possible learning project after FAT12 is solid
+
+**3. NTFS (Windows Filesystem)**
+
+*How it works:* B-tree based Master File Table (MFT)
+- **Pros**: 
+  - Very robust (journaling, transactions)
+  - Permissions and ACLs
+  - Compression and encryption
+  - Large file/volume support
+- **Cons**: 
+  - Extremely complex
+  - Proprietary (documentation incomplete)
+  - Requires significant infrastructure
+- **Used by**: Windows NT, 2000, XP, Vista, 7, 8, 10, 11
+- **Our choice**: Too complex for a learning OS
+
+**4. Custom Simple Filesystem**
+
+*How it works:* Design our own from scratch
+- **Pros**: 
+  - Learn filesystem design principles
+  - Optimize for our specific needs
+  - No compatibility baggage
+- **Cons**: 
+  - Can't mount on host OS without tools
+  - No existing tools
+  - Easy to make mistakes
+- **Our future**: Interesting learning exercise after mastering FAT12
+
+**Filesystem Comparison:**
+
+| Filesystem | Complexity | Max Size | Features | Compatibility | Our Use |
+|------------|------------|----------|----------|---------------|---------|
+| FAT12 | Low | 32 MB | Basic | Universal | ✅ **Current** |
+| FAT16 | Low | 2 GB | Basic | Universal | 🔄 Possible upgrade |
+| FAT32 | Medium | 2 TB | Basic | Universal | 🔄 Long-term option |
+| ext2 | Medium | 2 TB | Permissions | Linux | ⭐ Learning project |
+| ext3/4 | High | 16 TB+ | Journaling | Linux | ❌ Too complex |
+| NTFS | Very High | 256 TB | Advanced | Windows | ❌ Too complex |
+| Custom | Variable | Any | Custom | None | ⭐ Future learning |
+
+**Why FAT12 is Perfect for Learning:**
+
+1. **Simple**: Can implement in ~200 lines of C or ~150 lines of assembly
+2. **Well-Documented**: Microsoft's FAT specification is public
+3. **Universal**: Works on Windows, Linux, macOS
+4. **Debuggable**: Easy to inspect with hex editor
+5. **Historical**: Understanding FAT helps understand modern filesystems
+
+---
+
+### CPU Modes and Privilege Levels
+
+#### General CPU Mode Theory
+
+x86 CPUs support multiple operating modes with different capabilities:
+
+**1. Real Mode (16-bit)**
+
+- Default mode at power-on
+- 20-bit addressing (1 MB limit)
+- Segmentation required
+- No memory protection
+- Direct hardware access
+- BIOS interrupts available
+
+**2. Protected Mode (32-bit)**
+
+- Enabled via CR0 register
+- 32-bit addressing (4 GB)
+- Segmentation and/or paging
+- Memory protection via rings
+- Hardware virtualization support
+- No BIOS (must write drivers)
+
+**3. Long Mode (64-bit)**
+
+- Extension of protected mode
+- 48-bit virtual addresses (256 TB)
+- Mandatory paging
+- Simplified segmentation
+- NX bit support
+- FS/GS segments for thread-local storage
+
+**4. Virtual 8086 Mode**
+
+- Runs 16-bit code in protected mode
+- Useful for DOS compatibility
+- Can trap privileged instructions
+- Used by Windows 9x, DOSBox
+
+**5. System Management Mode (SMM)**
+
+- Hidden mode for firmware
+- Highest privilege level
+- Used for power management, security
+- Invisible to OS
+
+#### Our Implementation
+
+**Current: Real Mode → Protected Mode Transition**
+
+Our bootloader starts in real mode and transitions the kernel to protected mode:
+
+**Step 1: Prepare for Protected Mode (in Stage 2)**
+
+```c
+// 1. Disable interrupts (we'll set up new IDT later)
+__asm__ volatile("cli");
+
+// 2. Enable A20 line (access memory above 1MB)
+void EnableA20(void) {
+    // Method 1: Fast A20 (most reliable)
+    uint8_t value = x86_inb(0x92);
+    x86_outb(0x92, value | 2);
+    
+    // Method 2: Keyboard controller (slower, more compatible)
+    // Wait for keyboard controller ready
+    while (x86_inb(0x64) & 0x02);
+    x86_outb(0x64, 0xD1);  // Write to output port
+    while (x86_inb(0x64) & 0x02);
+    x86_outb(0x60, 0xDF);  // Enable A20
+}
+```
+
+**What is A20 Line?**
+
+Historical baggage from original IBM PC:
+- 8086 had 20 address lines (A0-A19) = 1 MB
+- 8086 wrapped around after 1MB (address 0x100000 became 0x00000)
+- Some DOS programs relied on this wraparound bug
+- 80286+ had 24+ address lines but A20 was gated for compatibility
+- Must explicitly enable A20 to access memory above 1MB
+
+**Step 2: Set Up GDT**
+
+```c
+// Define GDT entries
+struct GDTEntry gdt[3];
+
+// Null descriptor (required by CPU)
+gdt[0] = (struct GDTEntry){0, 0, 0, 0, 0, 0};
+
+// Kernel code segment (selector 0x08)
+gdt[1] = (struct GDTEntry){
+    .limit_low = 0xFFFF,
+    .base_low = 0x0000,
+    .base_mid = 0x00,
+    .access = 0x9A,        // Present, Ring 0, Code, Readable
+    .granularity = 0xCF,   // 4KB pages, 32-bit
+    .base_high = 0x00
+};
+
+// Kernel data segment (selector 0x10)
+gdt[2] = (struct GDTEntry){
+    .limit_low = 0xFFFF,
+    .base_low = 0x0000,
+    .base_mid = 0x00,
+    .access = 0x92,        // Present, Ring 0, Data, Writable
+    .granularity = 0xCF,   // 4KB pages, 32-bit
+    .base_high = 0x00
+};
+
+// Load GDT
+struct {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed)) gdt_descriptor = {
+    .limit = sizeof(gdt) - 1,
+    .base = (uint32_t)&gdt
+};
+
+__asm__ volatile("lgdt %0" : : "m"(gdt_descriptor));
+```
+
+**Step 3: Switch to Protected Mode**
+
+```assembly
+; Set PE bit in CR0
+mov eax, cr0
+or eax, 1
+mov cr0, eax
+
+; Far jump to flush CPU pipeline and load CS with code selector
+jmp 0x08:protected_mode_entry
+
+[bits 32]
+protected_mode_entry:
+    ; Now in 32-bit protected mode!
+    ; Set up segment registers
+    mov ax, 0x10      ; Data segment selector
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+    
+    ; Set up stack
+    mov esp, 0x90000
+    mov ebp, esp
+    
+    ; Jump to kernel
+    call 0x100000
+```
+
+**Why Far Jump?**
+
+The far jump (`jmp 0x08:address`) serves two purposes:
+1. Loads CS with new code selector (0x08)
+2. Flushes CPU pipeline (instruction prefetch buffer)
+
+**Current Privilege Level:**
+
+Our kernel runs in Ring 0 (highest privilege):
+
+```
+Ring 0: Kernel (us)
+Ring 1: Device drivers (unused)
+Ring 2: Device drivers (unused)  
+Ring 3: User programs (future)
+```
+
+**Segment Selectors Explained:**
+
+```
+Selector 0x08 = 0000 0000 0000 1000
+                ^^^^ ^^^^ ^^^^ ^│││
+                │              ││└─ RPL (Requested Privilege Level) = 0
+                │              │└── TI (Table Indicator) = 0 (GDT)
+                └──────────────┴─── Index = 1 (second GDT entry)
+
+Selector 0x10 = 0000 0000 0001 0000 (index = 2, third GDT entry)
+```
+
+#### Alternative Approaches
+
+**1. Stay in Real Mode**
+
+*How it works:* Never transition to protected mode
+- **Pros**: Simpler, BIOS available, easier debugging
+- **Cons**: 1 MB limit, no protection, no modern features
+- **Used by**: DOS, very simple embedded systems
+- **Our choice**: Too limited, can't learn real OS concepts
+
+**2. Switch to Long Mode (64-bit) Directly**
+
+*How it works:* Real mode → Long mode, skip protected mode
+- **Pros**: Modern, large address space, NX bit
+- **Cons**: 
+  - More complex setup (IA-32e page tables required before switch)
+  - Must have 64-bit CPU
+  - Skips learning protected mode concepts
+- **Used by**: Modern 64-bit bootloaders (GRUB2 UEFI)
+- **Our choice**: Too advanced for first OS, want to understand 32-bit first
+
+**3. Use Virtual 8086 Mode**
+
+*How it works:* Protected mode that can run real mode code
+- **Pros**: Best of both worlds, can call BIOS in protected mode
+- **Cons**: Complex to set up, limited usefulness
+- **Used by**: Windows 9x DOS boxes, some embedded systems
+- **Our choice**: Unnecessary complexity, moving away from real mode
+
+**4. Unreal Mode / Big Real Mode**
+
+*How it works:* Real mode with 4GB segments
+- **Pros**: Access full 4GB in real mode, BIOS still works
+- **Cons**: Undefined behavior, fragile, non-standard
+- **Used by**: Some bootloaders, DOS extenders
+- **Our choice**: Hacky, prefer clean protected mode transition
+
+**CPU Mode Comparison:**
+
+| Mode | Address Space | Protection | Paging | Complexity | Our Use |
+|------|---------------|------------|--------|------------|---------|
+| Real Mode | 1 MB | None | No | Low | ✅ Bootloader |
+| Unreal Mode | 4 GB | None | No | Medium | ❌ Hacky |
+| Protected Mode (no paging) | 4 GB | Rings | No | Medium | ✅ **Current** |
+| Protected Mode (paging) | 4 GB virtual | Rings | Yes | High | 🔄 Future |
+| Virtual 8086 | 1 MB | Rings | Yes | High | ❌ Unnecessary |
+| Long Mode (64-bit) | 256 TB | Rings + NX | Yes | Very High | ⭐ Long-term goal |
+
+**Our Rationale:**
+
+1. Start in real mode (required by BIOS)
+2. Move to protected mode without paging (simpler learning)
+3. Add paging later (when needed for virtual memory)
+4. Eventually move to 64-bit long mode (modern OS feature)
+
+This progression teaches each concept in isolation before combining them.
+
+---
+
+### Interrupt Handling Strategies
+
+#### General Interrupt Theory
+
+Interrupts are how hardware and software signal events to the CPU:
+
+**Types of Interrupts:**
+
+**1. Hardware Interrupts (IRQs)**
+
+External devices signal CPU:
+- IRQ 0: Timer (PIT - Programmable Interval Timer)
+- IRQ 1: Keyboard
+- IRQ 2: Cascade (connects to second PIC)
+- IRQ 3-7: Serial, parallel, floppy, etc.
+- IRQ 8-15: RTC, mouse, IDE, etc.
+
+**2. Software Interrupts**
+
+Triggered by INT instruction:
+- INT 0x10: BIOS video services
+- INT 0x13: BIOS disk services
+- INT 0x16: BIOS keyboard services
+- INT 0x80: Linux system calls (historical)
+- INT 0x21: DOS services (historical)
+
+**3. CPU Exceptions**
+
+CPU-generated errors:
+- INT 0: Divide by zero
+- INT 1: Debug exception
+- INT 3: Breakpoint
+- INT 6: Invalid opcode
+- INT 13: General protection fault
+- INT 14: Page fault
+
+**Interrupt Processing:**
+
+1. CPU receives interrupt signal
+2. CPU pushes flags, CS, IP onto stack
+3. CPU loads handler address from IVT/IDT
+4. Handler executes
+5. Handler calls IRET to return
+6. CPU pops IP, CS, flags from stack
+
+#### Our Implementation
+
+**Real Mode: Interrupt Vector Table (IVT)**
+
+In real mode, interrupt handlers are found via IVT at address 0x0000:
+
+```
+IVT Entry = 0x0000 + (interrupt_number * 4)
+Each entry: [Offset:16][Segment:16]
+```
+
+Example: INT 0x10 handler at entry 0x10 * 4 = 0x0040
+
+**Using BIOS Interrupts in Our Bootloader:**
+
+```c
+// x86.asm - BIOS interrupt wrapper
+_x86_Video_WriteCharTeletype:
+    push bp
+    mov bp, sp
+    
+    mov ah, 0x0E          ; BIOS teletype function
+    mov al, [bp + 4]      ; Get character parameter
+    mov bh, [bp + 6]      ; Get page parameter
+    
+    int 0x10              ; Call BIOS
+    
+    pop bp
+    ret
+```
+
+**Why We Use BIOS:**
+
+In real mode, BIOS provides free device drivers:
+- Video output
+- Disk I/O
+- Keyboard input
+- Timer services
+- Memory detection
+
+**Protected Mode: Interrupt Descriptor Table (IDT)**
+
+In protected mode, BIOS interrupts don't work. We must set up our own IDT:
+
+```c
+// IDT entry structure
+struct IDTEntry {
+    uint16_t offset_low;   // Handler address low 16 bits
+    uint16_t selector;     // Code segment selector
+    uint8_t  zero;         // Unused, set to 0
+    uint8_t  type_attr;    // Type and attributes
+    uint16_t offset_high;  // Handler address high 16 bits
+} __attribute__((packed));
+
+struct IDTEntry idt[256];  // 256 possible interrupts
+
+// Set up an interrupt handler
+void IDT_SetGate(int interrupt, void (*handler)(), uint16_t selector, uint8_t type) {
+    uint32_t handler_addr = (uint32_t)handler;
+    
+    idt[interrupt].offset_low = handler_addr & 0xFFFF;
+    idt[interrupt].offset_high = (handler_addr >> 16) & 0xFFFF;
+    idt[interrupt].selector = selector;  // Code segment (0x08)
+    idt[interrupt].zero = 0;
+    idt[interrupt].type_attr = type;     // 0x8E = Present, Ring 0, 32-bit Interrupt Gate
+}
+
+// Load IDT
+struct {
+    uint16_t limit;
+    uint32_t base;
+} __attribute__((packed)) idt_descriptor = {
+    .limit = sizeof(idt) - 1,
+    .base = (uint32_t)&idt
+};
+
+__asm__ volatile("lidt %0" : : "m"(idt_descriptor));
+```
+
+**Example: Divide by Zero Handler**
+
+```assembly
+; Exception handler stub
+divide_by_zero_handler:
+    cli                    ; Disable interrupts
+    push eax
+    push ebx
+    
+    ; Print error message
+    mov eax, 0xB8000
+    mov byte [eax], 'E'
+    mov byte [eax+1], 0x04  ; Red
+    
+    pop ebx
+    pop eax
+    
+    ; Halt system
+    cli
+    hlt
+```
+
+```c
+// Register the handler
+IDT_SetGate(0, divide_by_zero_handler, 0x08, 0x8E);
+```
+
+**PIC (Programmable Interrupt Controller) Remapping:**
+
+The original PC used two PICs (8259A chips) to handle hardware interrupts:
+
+**Problem:** Default PIC IRQs conflict with CPU exceptions:
+- IRQ 0-7 → INT 0x08-0x0F (conflicts with CPU exceptions 8-15)
+- IRQ 8-15 → INT 0x70-0x77
+
+**Solution:** Remap PICs to avoid conflict:
+
+```c
+void PIC_Remap(uint8_t offset1, uint8_t offset2) {
+    // offset1: Master PIC vector offset (typically 0x20)
+    // offset2: Slave PIC vector offset (typically 0x28)
+    
+    // Save masks
+    uint8_t mask1 = x86_inb(0x21);
+    uint8_t mask2 = x86_inb(0xA1);
+    
+    // Start initialization
+    x86_outb(0x20, 0x11);  // Master PIC: ICW1 (init)
+    x86_outb(0xA0, 0x11);  // Slave PIC: ICW1
+    
+    // Set vector offsets
+    x86_outb(0x21, offset1);  // Master PIC: ICW2 (offset)
+    x86_outb(0xA1, offset2);  // Slave PIC: ICW2
+    
+    // Tell PICs about each other
+    x86_outb(0x21, 0x04);  // Master PIC: ICW3 (slave at IRQ2)
+    x86_outb(0xA1, 0x02);  // Slave PIC: ICW3 (cascade identity)
+    
+    // Set mode
+    x86_outb(0x21, 0x01);  // Master PIC: ICW4 (8086 mode)
+    x86_outb(0xA1, 0x01);  // Slave PIC: ICW4
+    
+    // Restore masks
+    x86_outb(0x21, mask1);
+    x86_outb(0xA1, mask2);
+}
+
+// Usage:
+PIC_Remap(0x20, 0x28);
+// Now: IRQ 0-7 → INT 0x20-0x27
+//      IRQ 8-15 → INT 0x28-0x2F
+```
+
+**After remapping:**
+- IRQ 0 (Timer) → INT 0x20
+- IRQ 1 (Keyboard) → INT 0x21
+- IRQ 2 (Cascade) → INT 0x22
+- ... and so on
+
+**Enabling/Disabling Interrupts:**
+
+```c
+// Disable all interrupts
+__asm__ volatile("cli");
+
+// Enable interrupts
+__asm__ volatile("sti");
+
+// Mask specific IRQ (disable one device)
+void IRQ_Mask(uint8_t irq) {
+    uint16_t port = (irq < 8) ? 0x21 : 0xA1;
+    uint8_t value = x86_inb(port) | (1 << (irq % 8));
+    x86_outb(port, value);
+}
+
+// Unmask IRQ (enable one device)
+void IRQ_Unmask(uint8_t irq) {
+    uint16_t port = (irq < 8) ? 0x21 : 0xA1;
+    uint8_t value = x86_inb(port) & ~(1 << (irq % 8));
+    x86_outb(port, value);
+}
+```
+
+**Acknowledging Interrupts (EOI):**
+
+After handling a hardware interrupt, must send End of Interrupt (EOI):
+
+```c
+void PIC_SendEOI(uint8_t irq) {
+    if (irq >= 8) {
+        x86_outb(0xA0, 0x20);  // Slave PIC EOI
+    }
+    x86_outb(0x20, 0x20);      // Master PIC EOI (always)
+}
+```
+
+**Example: Timer Interrupt Handler**
+
+```c
+uint32_t tick_count = 0;
+
+void timer_handler() {
+    tick_count++;
+    
+    // Do timer-related work
+    // ...
+    
+    // Send EOI
+    PIC_SendEOI(0);
+}
+
+// Set up timer
+IDT_SetGate(0x20, timer_handler, 0x08, 0x8E);
+IRQ_Unmask(0);  // Enable IRQ 0
+__asm__ volatile("sti");  // Enable interrupts globally
+```
+
+#### Alternative Approaches
+
+**1. Polling Instead of Interrupts**
+
+*How it works:* Continuously check device status
+- **Pros**: Simpler, no interrupt handler complexity
+- **Cons**: Wastes CPU, slow response, can't sleep
+- **Used by**: Simple embedded systems, some early computers
+- **Our choice**: Interrupts are essential for responsive OS
+
+**2. APIC (Advanced PIC)**
+
+*How it works:* Modern interrupt controller, replaces 8259 PIC
+- **Pros**: 
+  - More interrupts (224 vs 16)
+  - Per-CPU interrupts (SMP)
+  - Message-based (no EOI needed)
+  - Better priority handling
+- **Cons**: 
+  - More complex to program
+  - Requires APIC detection
+  - Not available on all hardware
+- **Used by**: Modern x86 systems, multi-core CPUs
+- **Our future**: Will implement after basic PIC works
+
+**3. MSI/MSI-X (Message Signaled Interrupts)**
+
+*How it works:* PCIe devices write to memory-mapped address
+- **Pros**: 
+  - No shared IRQ lines
+  - Better performance
+  - More flexible
+- **Cons**: 
+  - Requires PCIe
+  - Complex configuration
+  - Need APIC
+- **Used by**: Modern PCIe devices
+- **Our future**: Long-term goal for PCIe support
+
+**4. System Call Methods**
+
+Different ways to invoke kernel from user space:
+
+| Method | Speed | Complexity | Compatibility | Modern Use |
+|--------|-------|------------|---------------|-----------|
+| INT 0x80 | Slow | Low | Universal | ❌ Legacy (Linux < 2.6) |
+| SYSENTER/SYSEXIT | Fast | Medium | Intel only | ✅ Linux x86 |
+| SYSCALL/SYSRET | Fast | Medium | AMD64 | ✅ Linux x86_64 |
+| Software Interrupt | Slow | Low | Universal | 🔄 Our current plan |
+
+**Interrupt Comparison:**
+
+| Approach | Latency | CPU Usage | Complexity | Our Use |
+|----------|---------|-----------|------------|---------|
+| Polling | High | Very High | Low | ❌ Inefficient |
+| 8259 PIC | Medium | Low | Medium | ✅ **Current plan** |
+| APIC | Low | Low | High | ⭐ Future (SMP) |
+| MSI/MSI-X | Very Low | Very Low | Very High | ⭐ Long-term |
+
+**Our Rationale:**
+
+1. Use BIOS interrupts in real mode (free drivers)
+2. Set up IDT and PIC in protected mode (required)
+3. Later add APIC for multi-core support
+4. Eventually support MSI for modern devices
+
+Each step builds on the previous, teaching interrupt concepts incrementally.
 
 ---
 
