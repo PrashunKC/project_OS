@@ -1251,6 +1251,496 @@ Power On → BIOS → Stage 1 Bootloader (512 bytes) → Stage 2 Bootloader (C +
 
 ---
 
+## Visual Architecture and Data Flow
+
+This section provides visual representations of how data flows through the system and how components interact.
+
+### Complete System Boot Flow Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         POWER ON                                │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    BIOS POST & Init                             │
+│  • Hardware detection                                           │
+│  • Memory test                                                  │
+│  • Identify boot devices                                        │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│              Load Boot Sector (512 bytes)                       │
+│  • Read LBA 0 (sector 0) from boot disk                        │
+│  • Load to memory at 0x7C00                                     │
+│  • Verify boot signature (0xAA55)                               │
+│  • Jump to 0x7C00                                               │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  Stage 1 Bootloader                             │
+│                   (boot.asm - 512 bytes)                        │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 1. Initialize segments (DS, ES, SS, CS = 0)      │          │
+│  │ 2. Set stack at 0x7C00 (grows down)              │          │
+│  │ 3. Detect disk geometry (INT 13h, AH=08h)        │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 4. Read FAT12 structures:                         │          │
+│  │    • Root directory (sector 19, 14 sectors)       │          │
+│  │    • FAT table (sector 1, 9 sectors)              │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 5. Search for "STAGE2  BIN" in root dir           │          │
+│  │    • Compare 11-character filename                │          │
+│  │    • Get first cluster number                     │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 6. Load Stage 2 into memory:                      │          │
+│  │    • Start at 0x0500                              │          │
+│  │    • Follow FAT12 cluster chain                   │          │
+│  │    • Load until EOF (cluster >= 0xFF8)            │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 7. Jump to Stage 2 entry point (0x0500)           │          │
+│  └───────────────────────────────────────────────────┘          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                  Stage 2 Bootloader                             │
+│              (main.asm + main.c + helpers)                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 1. Assembly Entry (main.asm):                     │          │
+│  │    • Initialize segments                          │          │
+│  │    • Set up stack (SP=0, SS=DS)                   │          │
+│  │    • Pass boot drive to C code (DX register)      │          │
+│  │    • Call C entry point (_cstart_)                │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 2. C Entry Point (main.c):                        │          │
+│  │    • Display "Stage 2 loading..."                 │          │
+│  │    • Initialize disk subsystem                    │          │
+│  │    • Initialize FAT filesystem                    │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 3. Load Kernel:                                   │          │
+│  │    • Search for "KERNEL  BIN"                     │          │
+│  │    • Load to buffer                               │          │
+│  │    • Copy to 0x100000 (1MB mark)                  │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 4. Prepare for Protected Mode:                    │          │
+│  │    • Enable A20 line                              │          │
+│  │    • Set up GDT (Global Descriptor Table)         │          │
+│  │    • Load GDT register                            │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 5. Switch to Protected Mode:                      │          │
+│  │    • Set PE bit in CR0                            │          │
+│  │    • Far jump to flush pipeline                   │          │
+│  │    • Set up 32-bit segments                       │          │
+│  │    • Jump to kernel at 0x100000                   │          │
+│  └───────────────────────────────────────────────────┘          │
+└────────────────────────┬────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────────────┐
+│                    32-bit Kernel                                │
+│                  (entry.asm + main.c)                           │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 1. Entry Point (entry.asm):                       │          │
+│  │    • Set up stack at 0x200000 (2MB)               │          │
+│  │    • Call C kernel entry (start)                  │          │
+│  └───────────────────────┬───────────────────────────┘          │
+│                          ▼                                      │
+│  ┌───────────────────────────────────────────────────┐          │
+│  │ 2. Kernel Main (main.c):                          │          │
+│  │    • Clear VGA text buffer (0xB8000)              │          │
+│  │    • Write "Hello world from kernel"              │          │
+│  │    • Infinite loop (halt)                         │          │
+│  └───────────────────────────────────────────────────┘          │
+│                                                                 │
+│  Future: IDT, Interrupts, Memory Manager, Drivers, Scheduler   │
+└─────────────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+                   OS RUNNING
+```
+
+### Memory Layout During Boot Process
+
+```
+Real Mode (16-bit) Memory Map - Bootloader Stage
+═════════════════════════════════════════════════════════════
+
+0x00000000  ┌─────────────────────────────────────┐
+            │  Interrupt Vector Table (IVT)        │  1 KB
+            │  256 entries × 4 bytes               │
+0x00000400  ├─────────────────────────────────────┤
+            │  BIOS Data Area (BDA)                │  256 B
+0x00000500  ├─────────────────────────────────────┤
+            │                                      │
+            │  Stage 2 Bootloader                  │
+            │  Loaded here by Stage 1              │  ~30 KB
+            │  (C code + assembly + data)          │
+            │                                      │
+0x00007C00  ├─────────────────────────────────────┤
+            │  Stage 1 Bootloader                  │  512 B
+            │  Loaded here by BIOS                 │
+0x00007E00  ├─────────────────────────────────────┤
+            │                                      │
+            │  Disk Read Buffer                    │
+            │  FAT, Root Dir, File data            │  ~600 KB
+            │                                      │
+0x0009FC00  ├─────────────────────────────────────┤
+            │  Extended BIOS Data Area (EBDA)      │  ~1 KB
+0x000A0000  ├─────────────────────────────────────┤
+            │  Video Memory (VGA)                  │
+            │  0xB8000 = Text mode buffer          │  128 KB
+0x000C0000  ├─────────────────────────────────────┤
+            │  ROM BIOS and Adapter ROMs           │  256 KB
+0x00100000  └─────────────────────────────────────┘
+
+Protected Mode (32-bit) Memory Map - Kernel Stage
+═════════════════════════════════════════════════════════════
+
+0x00000000  ┌─────────────────────────────────────┐
+            │  Real Mode Legacy Area               │  1 MB
+            │  (Still contains Stage 1 & 2)        │
+0x00100000  ├─────────────────────────────────────┤ ← 1 MB
+            │                                      │
+            │  Kernel Code (.text)                 │
+            │  Kernel Data (.data, .bss)           │  ~1 MB
+            │                                      │
+0x00200000  ├─────────────────────────────────────┤ ← 2 MB
+            │                                      │
+            │  Kernel Stack                        │
+            │  (Grows downward from 2MB)           │  ~1 MB
+            │                                      │
+0x00300000  ├─────────────────────────────────────┤ ← 3 MB
+            │                                      │
+            │  Free Memory                         │
+            │  (Future: Heap, Page Tables,         │
+            │   User Programs, etc.)               │
+            │                                      │
+            │                                      │
+            ▼                                      ▼
+
+Note: Actual RAM ends at physical limit (e.g., 16MB, 32MB, etc.)
+```
+
+### FAT12 Filesystem Structure
+
+```
+Floppy Disk Image (1.44 MB = 2880 sectors × 512 bytes)
+═══════════════════════════════════════════════════════════════
+
+Sector 0      ┌───────────────────────────────────────┐
+(LBA 0)       │  Boot Sector                          │
+              │  • Jump instruction (3 bytes)          │
+              │  • BPB (BIOS Parameter Block)          │
+              │  • Boot code (Stage 1)                 │
+              │  • Boot signature (0xAA55)             │
+Sector 1      ├───────────────────────────────────────┤
+              │                                        │
+              │  FAT #1 (File Allocation Table)       │
+              │  9 sectors × 512 bytes = 4608 bytes    │
+              │  2880 clusters × 12 bits = 4320 bytes  │
+              │  (plus some padding)                   │
+              │                                        │
+Sector 10     ├───────────────────────────────────────┤
+              │                                        │
+              │  FAT #2 (Backup copy)                  │
+              │  Exact duplicate of FAT #1             │
+              │  9 sectors                             │
+              │                                        │
+Sector 19     ├───────────────────────────────────────┤
+              │                                        │
+              │  Root Directory                        │
+              │  224 entries × 32 bytes = 7168 bytes   │
+              │  14 sectors                            │
+              │                                        │
+              │  Entry format:                         │
+              │  • Name (11 bytes, 8.3 format)         │
+              │  • Attributes (1 byte)                 │
+              │  • Reserved (10 bytes)                 │
+              │  • Time/Date (4 bytes)                 │
+              │  • First cluster (2 bytes)             │
+              │  • File size (4 bytes)                 │
+              │                                        │
+Sector 33     ├───────────────────────────────────────┤
+              │                                        │
+              │                                        │
+              │  Data Area                             │
+              │  (Clusters 2-2847)                     │
+              │                                        │
+              │  Files stored here:                    │
+              │  • STAGE2.BIN                          │
+              │  • KERNEL.BIN                          │
+              │  • TEST.TXT                            │
+              │                                        │
+              │  Each cluster = 1 sector = 512 bytes   │
+              │                                        │
+              │                                        │
+Sector 2880   └───────────────────────────────────────┘
+
+FAT12 Cluster Chain Example:
+════════════════════════════════════════════════════════════
+
+File: KERNEL.BIN (6 KB = 12 sectors = 12 clusters)
+
+Directory Entry → First Cluster: 2
+
+FAT Table:
+  Cluster 2  →  3     (next cluster is 3)
+  Cluster 3  →  4     (next cluster is 4)
+  Cluster 4  →  5     (next cluster is 5)
+  Cluster 5  →  6     (next cluster is 6)
+  Cluster 6  →  7     (next cluster is 7)
+  Cluster 7  →  8     (next cluster is 8)
+  Cluster 8  →  9     (next cluster is 9)
+  Cluster 9  →  10    (next cluster is 10)
+  Cluster 10 →  11    (next cluster is 11)
+  Cluster 11 →  12    (next cluster is 12)
+  Cluster 12 →  13    (next cluster is 13)
+  Cluster 13 →  0xFFF (End of file)
+
+Reading sequence:
+  1. Read cluster 2 → Sector 33 (LBA = 33 + (2-2) = 33)
+  2. Read cluster 3 → Sector 34 (LBA = 33 + (3-2) = 34)
+  3. ... continue ...
+  12. Read cluster 13 → Sector 44 (LBA = 33 + (13-2) = 44)
+  13. See 0xFFF → File complete!
+```
+
+### Protected Mode Transition
+
+```
+CPU Mode Transition: Real Mode → Protected Mode
+════════════════════════════════════════════════════════════
+
+Real Mode (16-bit)                Protected Mode (32-bit)
+┌───────────────────┐            ┌───────────────────┐
+│ Segmented Memory  │            │ Flat Memory       │
+│ segment:offset    │            │ Linear addresses  │
+│ 20-bit addresses  │   SWITCH   │ 32-bit addresses  │
+│ 1 MB limit        │  ───────>  │ 4 GB limit        │
+│ No protection     │            │ Memory protection │
+│ BIOS available    │            │ No BIOS           │
+└───────────────────┘            └───────────────────┘
+
+Transition Steps:
+════════════════════════════════════════════════════════════
+
+1. Disable Interrupts
+   ┌──────────────────────────────────┐
+   │ CLI                              │  Clear interrupt flag
+   └──────────────────────────────────┘
+
+2. Enable A20 Line
+   ┌──────────────────────────────────┐
+   │ IN   AL, 0x92                    │  Read from port 0x92
+   │ OR   AL, 2                       │  Set bit 1
+   │ OUT  0x92, AL                    │  Write back
+   └──────────────────────────────────┘
+   
+   Why? A20 line gates address bit 20
+   • Disabled: Memory wraps at 1MB (8086 compatibility)
+   • Enabled: Can access memory above 1MB
+
+3. Set Up GDT (Global Descriptor Table)
+   ┌──────────────────────────────────────────────────────┐
+   │ GDT Entry 0: Null Descriptor (required)              │
+   │   Base: 0x00000000, Limit: 0x00000, Access: 0x00     │
+   ├──────────────────────────────────────────────────────┤
+   │ GDT Entry 1: Code Segment (Selector 0x08)            │
+   │   Base: 0x00000000, Limit: 0xFFFFF, Access: 0x9A     │
+   │   Flags: 4KB granularity, 32-bit, Present, Ring 0    │
+   │   Type: Code, Executable, Readable                   │
+   ├──────────────────────────────────────────────────────┤
+   │ GDT Entry 2: Data Segment (Selector 0x10)            │
+   │   Base: 0x00000000, Limit: 0xFFFFF, Access: 0x92     │
+   │   Flags: 4KB granularity, 32-bit, Present, Ring 0    │
+   │   Type: Data, Writable                               │
+   └──────────────────────────────────────────────────────┘
+
+4. Load GDT Register
+   ┌──────────────────────────────────┐
+   │ LGDT [gdt_descriptor]            │  Load GDT
+   │                                  │
+   │ gdt_descriptor:                  │
+   │   .limit = sizeof(gdt) - 1       │
+   │   .base  = &gdt                  │
+   └──────────────────────────────────┘
+
+5. Set Protected Mode Bit
+   ┌──────────────────────────────────┐
+   │ MOV  EAX, CR0                    │  Read CR0 control register
+   │ OR   EAX, 1                      │  Set PE (Protection Enable) bit
+   │ MOV  CR0, EAX                    │  Write back to CR0
+   └──────────────────────────────────┘
+
+6. Far Jump (Flush Pipeline)
+   ┌──────────────────────────────────┐
+   │ JMP  0x08:protected_mode_entry   │  Jump to code selector
+   └──────────────────────────────────┘
+   
+   Why far jump?
+   • Loads CS with new code selector (0x08)
+   • Flushes CPU instruction prefetch buffer
+   • Ensures execution continues in protected mode
+
+7. Set Up Segment Registers [Now in 32-bit mode]
+   ┌──────────────────────────────────┐
+   │ [BITS 32]                        │
+   │ protected_mode_entry:            │
+   │   MOV  AX, 0x10                  │  Data segment selector
+   │   MOV  DS, AX                    │  Set DS
+   │   MOV  ES, AX                    │  Set ES
+   │   MOV  FS, AX                    │  Set FS
+   │   MOV  GS, AX                    │  Set GS
+   │   MOV  SS, AX                    │  Set SS
+   │   MOV  ESP, 0x90000              │  Set 32-bit stack pointer
+   └──────────────────────────────────┘
+
+8. Jump to Kernel
+   ┌──────────────────────────────────┐
+   │ CALL 0x100000                    │  Call kernel entry point
+   └──────────────────────────────────┘
+
+Result: CPU now in protected mode!
+• 32-bit instructions
+• 4 GB address space
+• Memory protection via segments
+• Can set up paging for virtual memory
+• No BIOS (must write own drivers)
+```
+
+### Build System Data Flow
+
+```
+Source Files → Build Process → Bootable Disk Image
+════════════════════════════════════════════════════════════════
+
+┌─────────────────────────────────────────────────────────────┐
+│                     SOURCE FILES                            │
+├─────────────────────────────────────────────────────────────┤
+│  Stage 1: boot.asm (Assembly)                               │
+│  Stage 2: main.asm, main.c, stdio.c, x86.asm, ...          │
+│  Kernel:  entry.asm, main.c                                 │
+│  Tools:   fat.c (FAT12 reader utility)                      │
+└────────────┬────────────────────────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────────────────────────┐
+│                  COMPILATION PHASE                          │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  Stage 1:                                                   │
+│  ┌────────────────────────────────────┐                    │
+│  │ boot.asm  →  NASM -f bin  →  stage1.bin (512 B)        │
+│  └────────────────────────────────────┘                    │
+│                                                             │
+│  Stage 2:                                                   │
+│  ┌────────────────────────────────────┐                    │
+│  │ main.asm  →  NASM -f obj  →  main.obj                  │
+│  │ x86.asm   →  NASM -f obj  →  x86.obj                   │
+│  │ main.c    →  WCC (16-bit) →  main_c.obj                │
+│  │ stdio.c   →  WCC (16-bit) →  stdio.obj                 │
+│  │ ...                                                      │
+│  └────────────────────┬───────────────┘                    │
+│                       ▼                                     │
+│  ┌────────────────────────────────────┐                    │
+│  │ WLINK (linker)                     │                    │
+│  │ • Combine all .obj files           │                    │
+│  │ • Apply linker script (linker.lnk) │                    │
+│  │ • Output raw binary                │                    │
+│  │  →  stage2.bin (~2-10 KB)          │                    │
+│  └────────────────────────────────────┘                    │
+│                                                             │
+│  Kernel:                                                    │
+│  ┌────────────────────────────────────┐                    │
+│  │ entry.asm →  NASM -f elf32  →  entry.o                 │
+│  │ main.c    →  GCC -m32       →  main.o                  │
+│  └────────────────────┬───────────────┘                    │
+│                       ▼                                     │
+│  ┌────────────────────────────────────┐                    │
+│  │ LD (GNU linker)                    │                    │
+│  │ • Combine .o files                 │                    │
+│  │ • Apply linker script (linker.ld)  │                    │
+│  │ • Output raw binary at 0x100000    │                    │
+│  │  →  kernel.bin (~1-5 KB)           │                    │
+│  └────────────────────────────────────┘                    │
+│                                                             │
+│  Tools (host):                                              │
+│  ┌────────────────────────────────────┐                    │
+│  │ fat.c  →  GCC (native)  →  fat (executable)            │
+│  └────────────────────────────────────┘                    │
+└────────────┬────────────────────────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────────────────────────┐
+│              DISK IMAGE CREATION PHASE                      │
+├─────────────────────────────────────────────────────────────┤
+│                                                             │
+│  1. Create blank image:                                     │
+│  ┌────────────────────────────────────┐                    │
+│  │ dd if=/dev/zero of=floppy.img      │                    │
+│  │    bs=512 count=2880                │                    │
+│  │  →  Blank 1.44 MB image            │                    │
+│  └────────────────────────────────────┘                    │
+│                                                             │
+│  2. Format as FAT12:                                        │
+│  ┌────────────────────────────────────┐                    │
+│  │ mkfs.fat -F 12 -n "NBOS" floppy.img│                    │
+│  │  →  FAT12 filesystem structures    │                    │
+│  │     (Boot sector, FATs, Root dir)   │                    │
+│  └────────────────────────────────────┘                    │
+│                                                             │
+│  3. Install bootloader:                                     │
+│  ┌────────────────────────────────────┐                    │
+│  │ dd if=stage1.bin of=floppy.img     │                    │
+│  │    conv=notrunc                     │                    │
+│  │  →  Bootloader in sector 0         │                    │
+│  │     (Preserves FAT filesystem)      │                    │
+│  └────────────────────────────────────┘                    │
+│                                                             │
+│  4. Copy files to filesystem:                               │
+│  ┌────────────────────────────────────┐                    │
+│  │ mcopy -i floppy.img stage2.bin ::/ │                    │
+│  │ mcopy -i floppy.img kernel.bin ::/ │                    │
+│  │ mcopy -i floppy.img test.txt ::/   │                    │
+│  │  →  Files in FAT12 root directory  │                    │
+│  └────────────────────────────────────┘                    │
+└────────────┬────────────────────────────────────────────────┘
+             │
+             ▼
+┌─────────────────────────────────────────────────────────────┐
+│              FINAL DISK IMAGE                               │
+│              main_floppy.img (1.44 MB)                      │
+├─────────────────────────────────────────────────────────────┤
+│  • Bootable (0xAA55 signature)                              │
+│  • FAT12 filesystem                                         │
+│  • Stage 1 in boot sector                                   │
+│  • Stage 2, Kernel, Test file in root directory             │
+│  • Can be used with QEMU, VirtualBox, VMware, real hardware │
+└─────────────────────────────────────────────────────────────┘
+```
+
+---
+
 ## Detailed Component Breakdown
 
 ### Stage 1 Bootloader (boot.asm)
