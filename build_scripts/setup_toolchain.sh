@@ -80,14 +80,20 @@ check_dependencies() {
     local missing_deps=()
     
     # Essential build tools
-    local required_tools=("gcc" "g++" "make" "bison" "flex" "gmp" "mpfr" "mpc" "texinfo")
+    local required_tools=("gcc" "g++" "make" "bison" "flex" "gmp" "mpfr" "mpc" "makeinfo")
     
     for tool in "${required_tools[@]}"; do
         case "$tool" in
-            gmp|mpfr|mpc)
+            gmp|mpfr)
                 # Check for development libraries
                 if ! pkg-config --exists "$tool" 2>/dev/null; then
                     missing_deps+=("lib${tool}-dev")
+                fi
+                ;;
+            mpc)
+                # Check for mpc library
+                if ! echo "int main() { return 0; }" | gcc -lmpc -x c - -o /dev/null 2>/dev/null; then
+                    missing_deps+=("libmpc-dev")
                 fi
                 ;;
             *)
