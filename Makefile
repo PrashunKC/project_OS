@@ -11,6 +11,9 @@ BUILD_DIR=build
 # Default target
 all: floppy_image tools_fat
 
+# Include toolchain configuration
+include build_scripts/toolchain.mk
+
 # Stage2
 stage2: $(BUILD_DIR)/stage2.bin
 
@@ -49,7 +52,14 @@ $(BUILD_DIR)/stage1.bin: always
 		$(ASM) $(SRC_DIR)/bootloader/stage1/boot.asm -f bin -o $(BUILD_DIR)/stage1.bin; \
 	fi
 
+#
+#	Tools
+#
+tools_fat: $(BUILD_DIR)/tools/fat
 
+$(BUILD_DIR)/tools/fat: always $(TOOLS_DIR)/fat/fat.c
+	mkdir -p $(BUILD_DIR)/tools
+	$(CC) -g -o $(BUILD_DIR)/tools/fat $(TOOLS_DIR)/fat/fat.c
 
 #
 #	Always (utility target to ensure build dir exists)

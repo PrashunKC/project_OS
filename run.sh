@@ -21,6 +21,11 @@ if [ ! -f build/main_floppy.img ]; then
 fi
 
 # Run QEMU
+# Unset Snap-related environment variables that might interfere with QEMU
+unset GTK_PATH
+unset GTK_EXE_PREFIX
+unset GIO_MODULE_DIR
+unset GSETTINGS_SCHEMA_DIR
+
 echo "Starting QEMU..."
-# Use -d guest_errors to see if we trigger any CPU exceptions or invalid hardware access
-qemu-system-i386 -fda build/main_floppy.img -d guest_errors
+qemu-system-i386 -fda build/main_floppy.img
