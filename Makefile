@@ -6,7 +6,7 @@ SRC_DIR=src
 TOOLS_DIR=tools
 BUILD_DIR=build
 
-.PHONY: all floppy_image bootloader clean always tools_fat stage1 stage2
+.PHONY: all floppy_image bootloader clean always tools_fat stage1 stage2 iso
 
 # Default target
 all: floppy_image tools_fat
@@ -37,6 +37,18 @@ $(BUILD_DIR)/main_floppy.img: bootloader stage2 kernel
 	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/stage2.bin "::/stage2.bin"
 	mcopy -i $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/kernel.bin "::/kernel.bin"
 	# mcopy -i $(BUILD_DIR)/main_floppy.img test.txt "::/test.txt"
+
+#
+#	ISO image
+#
+iso: $(BUILD_DIR)/main.iso
+
+$(BUILD_DIR)/main.iso: $(BUILD_DIR)/main_floppy.img
+	mkdir -p $(BUILD_DIR)/iso
+	cp $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/iso/
+	xorriso -as mkisofs -b main_floppy.img \
+		-o $(BUILD_DIR)/main.iso \
+		$(BUILD_DIR)/iso
 
 #
 #	Bootloader
@@ -80,3 +92,8 @@ clean:
 	rm -f $(SRC_DIR)/bootloader/stage2/*.err
 	rm -f $(SRC_DIR)/bootloader/stage2/fat.err
 	rm -rf $(BUILD_DIR)/*
+	rm -rf $(BUILD_DIR)/stage1.bin				
+	
+#
+#	The last line "rm -rf $(BUILD_DIR)/stage1.bin" is there to prevent the file from somehow coming back.... It seemed like it always came back.... Hopefully this fixes that....
+#
