@@ -94,8 +94,19 @@ start:
     mov bx, buffer
     call disk_read
 
-    ; (Removed dynamic data_start computation to keep boot sector <512 bytes.)
-
+    ; Compute data_start_lba = reserved + (fat_count * sectors_per_fat) + root_dir_sectors
+    mov ax, [bdb_dir_entries_count]
+    shl ax, 5                   ; *32
+    add ax, 511
+    shr ax, 9                   ; /512 = root_dir_sectors
+    mov cx, ax
+    mov ax, [bdb_sectors_per_fat]
+    mov bl, [bdb_fat_count]
+    xor bh, bh
+    mul bx
+    add ax, [bdb_reserved_sectors]
+    add ax, cx
+    mov [data_start_lba], ax
 
     xor bx, bx
     mov di, buffer
@@ -131,9 +142,10 @@ start:
     mov bx, stage2_LOAD_OFFSET
 
 .load_stage2_loop:
-    ; LBA for cluster (floppy FAT12): 33 + (cluster-2) == cluster + 31
+    ; LBA = data_start_lba + (cluster - 2)
     mov ax, [stage2_cluster]
-    add ax, 31
+    sub ax, 2
+    add ax, [data_start_lba]
 
     mov cl, 1
     mov dl, [ebr_drive_number]
@@ -241,19 +253,18 @@ lba_to_chs:
 ;   - es:bx: memory address where to store read data
 
 disk_read:
-    push ax                     ; save registers we'll modify
-    push bx                     
-    push cx                     
-    push dx                     
-    push di                     
+    push ax
+    push bx
+    push cx
+    push dx
+    push di
 
+    push cx                     ; Save sector count
+    call lba_to_chs
+    pop ax                      ; Restore as sector count in AL
 
-    push cx                     ; temporarely save cl
-    call lba_to_chs             ; convert LBA to CHS
-    pop ax                      ; number of sectors to read
-
-    mov ah, 02h                 ; BIOS read sectors function
-    mov di, 3                   ; retry count because floppy disks are unreliable in real life / hardware XD
+    mov ah, 0x02
+    mov di, 3
 
 .retry:
     pusha                       ; save all registers, we don't know what BIOS will modify
@@ -271,19 +282,14 @@ disk_read:
 
 
 .fail:
-    ; if all retries failed, hang the system (what do you mean "hang the system" ? I have a better idea, let's instead jump to a place called "floppy_error", compish? "XD"? ok, I'll take that as a yes.)
     jmp floppy_error
 
-
 .done:
-    popa                       ; restore all registers
-
-
     pop di
-    pop dx                     
-    pop cx                     
-    pop bx                     
-    pop ax                     ; restore registers modified
+    pop dx
+    pop cx
+    pop bx
+    pop ax
     ret
 
 
@@ -321,11 +327,12 @@ puts:
     pop si
     ret
 
-msg_loading:            db 'Loading...', ENDL, 0
-msg_read_failed:        db 'Read from disk failed!', ENDL, 0
-msg_stage2_not_found:   db 'STAGE2.BIN not found!', ENDL, 0
+msg_loading:            db 'Load', ENDL, 0
+msg_read_failed:        db 'Disk!', ENDL, 0
+msg_stage2_not_found:   db 'STAGE2!', ENDL, 0
 file_stage2_bin:        db 'STAGE2  BIN'
 stage2_cluster:         dw 0
+data_start_lba:         dw 0
 
 stage2_LOAD_SEGMENT     equ 0x2000
 stage2_LOAD_OFFSET      equ 0

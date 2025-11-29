@@ -6,7 +6,7 @@ SRC_DIR=src
 TOOLS_DIR=tools
 BUILD_DIR=build
 
-.PHONY: all floppy_image bootloader clean always tools_fat stage1 stage2 iso
+.PHONY: all floppy_image bootloader clean always tools_fat stage1 stage2 iso mbr vbr hdd_image iso_noemul
 
 # Default target
 all: floppy_image tools_fat
@@ -51,6 +51,46 @@ $(BUILD_DIR)/main.iso: $(BUILD_DIR)/main_floppy.img
 		$(BUILD_DIR)/iso
 
 #
+#	ISO image (no emulation mode)
+#
+iso_noemul: $(BUILD_DIR)/main_noemul.iso
+
+$(BUILD_DIR)/main_noemul.iso: vbr stage2 kernel
+	mkdir -p $(BUILD_DIR)/iso_noemul
+	cp $(BUILD_DIR)/vbr.bin $(BUILD_DIR)/iso_noemul/boot.bin
+	cp $(BUILD_DIR)/stage2.bin $(BUILD_DIR)/iso_noemul/
+	cp $(BUILD_DIR)/kernel.bin $(BUILD_DIR)/iso_noemul/
+	xorriso -as mkisofs \
+		-b boot.bin \
+		-no-emul-boot \
+		-boot-load-size 4 \
+		-o $(BUILD_DIR)/main_noemul.iso \
+		$(BUILD_DIR)/iso_noemul
+
+#
+#	Hard disk image
+#
+hdd_image: $(BUILD_DIR)/main_hdd.img
+
+$(BUILD_DIR)/main_hdd.img: mbr vbr stage2 kernel
+	# Create 32MB hard disk image
+	dd if=/dev/zero of=$(BUILD_DIR)/main_hdd.img bs=1M count=32
+	# Write MBR
+	dd if=$(BUILD_DIR)/mbr.bin of=$(BUILD_DIR)/main_hdd.img conv=notrunc bs=446 count=1
+	# Create partition table (one FAT16 partition, type 0x06, starting at sector 2048)
+	printf '\\x80\\x00\\x01\\x00\\x06\\x00\\x20\\x10\\x00\\x08\\x00\\x00\\x00\\xF8\\x00\\x00' | dd of=$(BUILD_DIR)/main_hdd.img bs=1 seek=446 conv=notrunc
+	# Write boot signature
+	printf '\\x55\\xAA' | dd of=$(BUILD_DIR)/main_hdd.img bs=1 seek=510 conv=notrunc
+	# Format partition as FAT16
+	mkfs.fat -F 16 -n "NBOS" --offset 2048 $(BUILD_DIR)/main_hdd.img
+	# Write VBR to partition start
+	dd if=$(BUILD_DIR)/vbr.bin of=$(BUILD_DIR)/main_hdd.img conv=notrunc bs=512 seek=2048
+	# Copy files to partition
+	mcopy -i $(BUILD_DIR)/main_hdd.img@@1M $(BUILD_DIR)/stage2.bin "::/stage2.bin"
+	mcopy -i $(BUILD_DIR)/main_hdd.img@@1M $(BUILD_DIR)/kernel.bin "::/kernel.bin"
+
+
+#
 #	Bootloader
 #
 bootloader: stage1 stage2
@@ -63,6 +103,23 @@ $(BUILD_DIR)/stage1.bin: always
 	else \
 		$(ASM) $(SRC_DIR)/bootloader/stage1/boot.asm -f bin -o $(BUILD_DIR)/stage1.bin; \
 	fi
+
+#
+#	MBR (Master Boot Record)
+#
+mbr: $(BUILD_DIR)/mbr.bin
+
+$(BUILD_DIR)/mbr.bin: always
+	$(ASM) $(SRC_DIR)/bootloader/mbr/mbr.asm -f bin -o $(BUILD_DIR)/mbr.bin
+
+#
+#	VBR (Volume Boot Record) - enhanced version with LBA support
+#
+vbr: $(BUILD_DIR)/vbr.bin
+
+$(BUILD_DIR)/vbr.bin: always
+	$(ASM) $(SRC_DIR)/bootloader/vbr/vbr.asm -f bin -o $(BUILD_DIR)/vbr.bin
+
 
 #
 #	Tools
