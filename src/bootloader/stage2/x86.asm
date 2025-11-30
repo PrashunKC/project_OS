@@ -81,11 +81,9 @@ x86_Disk_Reset:
     call x86_EnterProtectedMode
     [bits 32]
 
-    mov eax, g_RegFlags
-    mov ax, [eax]
-    and ax, 1
-    xor eax, eax
-    test ax, ax
+    ; Check carry flag (bit 0 = error)
+    movzx eax, word [g_RegFlags]
+    test al, 1
     jnz .error
     mov eax, 1
     jmp .done
@@ -155,11 +153,9 @@ x86_Disk_Read:
     call x86_EnterProtectedMode
     [bits 32]
 
-    mov eax, g_RegFlags
-    mov ax, [eax]
-    and ax, 1
-    xor eax, eax
-    test ax, ax
+    ; Check carry flag (bit 0 = error)
+    movzx eax, word [g_RegFlags]
+    test al, 1
     jnz .error
     mov eax, 1
     jmp .done
