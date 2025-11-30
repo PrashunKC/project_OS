@@ -31,7 +31,30 @@
 // Global cursor position
 static int cursor_row = 0;
 static int cursor_col = 0;
-static uint8_t *video_memory = (uint8_t *)VGA_MEMORY;
+static volatile uint8_t *video_memory = (volatile uint8_t *)VGA_MEMORY;
+
+// Scroll the screen content up by one line
+void scroll_screen(void)
+{
+    // Copy all lines up by one
+    for (int row = 1; row < VGA_HEIGHT; row++)
+    {
+        for (int col = 0; col < VGA_WIDTH * 2; col++)
+        {
+            int src_offset = (row * VGA_WIDTH * 2) + col;
+            int dst_offset = ((row - 1) * VGA_WIDTH * 2) + col;
+            video_memory[dst_offset] = video_memory[src_offset];
+        }
+    }
+    
+    // Clear the last line
+    int last_row_offset = (VGA_HEIGHT - 1) * VGA_WIDTH * 2;
+    for (int col = 0; col < VGA_WIDTH; col++)
+    {
+        video_memory[last_row_offset + col * 2] = ' ';
+        video_memory[last_row_offset + col * 2 + 1] = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK);
+    }
+}
 
 // Clear the screen with specified color
 void clear_screen(uint8_t color)
@@ -76,9 +99,10 @@ void kputc(char c, uint8_t color)
         }
     }
     
-    // Simple scroll handling
+    // Scroll screen if we've reached the bottom
     if (cursor_row >= VGA_HEIGHT)
     {
+        scroll_screen();
         cursor_row = VGA_HEIGHT - 1;
     }
 }
@@ -98,8 +122,10 @@ void knewline(void)
 {
     cursor_col = 0;
     cursor_row++;
+    // Scroll screen if we've reached the bottom
     if (cursor_row >= VGA_HEIGHT)
     {
+        scroll_screen();
         cursor_row = VGA_HEIGHT - 1;
     }
 }
