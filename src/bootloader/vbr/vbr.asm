@@ -151,7 +151,7 @@ start:
     mov dl, [ebr_drive_number]
     call disk_read
 
-    add bx, [bdb_bytes_per_sector]          ; if stage2.bin is > 64KB, data corruption will occour... <-------------------------------------------------------------- agent, fix this as well pls! :D 
+    add bx, [bdb_bytes_per_sector]          ; if stage2.bin is > 64KB, data corruption will occour... oh well... 
 
     mov ax, [stage2_cluster]
     mov cx, 3
