@@ -108,6 +108,8 @@ void kputc(char c, uint8_t color) {
     scroll_screen();
     cursor_row = VGA_HEIGHT - 1;
   }
+  extern void set_vga_cursor(int col, int row);
+  set_vga_cursor(cursor_col, cursor_row);
 }
 
 // Print a string with specified color

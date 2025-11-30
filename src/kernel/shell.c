@@ -1,4 +1,5 @@
 #include "shell.h"
+#include "vga.h"
 #include "stdint.h"
 
 // External functions from main.c
@@ -7,6 +8,7 @@ extern void kprint(const char *str, uint8_t color);
 extern void knewline(void);
 extern void clear_screen(uint8_t color);
 extern int get_cursor_col(void);
+extern int get_cursor_row(void);
 
 // VGA colors
 #define VGA_COLOR_BLACK 0x0
@@ -51,6 +53,8 @@ static int strncmp(const char *s1, const char *s2, int n) {
 // Display prompt
 static void show_prompt(void) {
   kprint("$ ", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+  extern void set_vga_cursor(int col, int row);
+  set_vga_cursor(get_cursor_col(), get_cursor_row());
 }
 
 // Built-in command: help
@@ -178,6 +182,8 @@ void shell_putchar(char c) {
       kputc(c, VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
     }
   }
+  extern void set_vga_cursor(int col, int row);
+  set_vga_cursor(get_cursor_col(), get_cursor_row());
 }
 
 // Initialize shell
