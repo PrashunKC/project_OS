@@ -6,7 +6,7 @@ SRC_DIR=src
 TOOLS_DIR=tools
 BUILD_DIR=build
 
-.PHONY: all floppy_image bootloader clean always tools_fat stage1 stage2 iso mbr vbr hdd_image iso_noemul
+.PHONY: all floppy_image bootloader clean always tools_fat stage1 stage2 iso mbr vbr hdd_image iso_noemul run-vbox run-vbox-iso
 
 # Default target
 all: floppy_image tools_fat
@@ -154,3 +154,28 @@ clean:
 #
 #	The last line "rm -rf $(BUILD_DIR)/stage1.bin" is there to prevent the file from somehow coming back.... It seemed like it always came back.... Hopefully this fixes that....
 #
+
+#
+#	VirtualBox targets
+#
+VBOX_VM_NAME := NBOS
+
+run-vbox: $(BUILD_DIR)/main_floppy.img
+	@echo "Setting up VirtualBox VM..."
+	@VBoxManage showvminfo "$(VBOX_VM_NAME)" > /dev/null 2>&1 && VBoxManage unregistervm "$(VBOX_VM_NAME)" --delete || true
+	@VBoxManage createvm --name "$(VBOX_VM_NAME)" --ostype Other --register
+	@VBoxManage modifyvm "$(VBOX_VM_NAME)" --memory 32 --vram 16 --graphicscontroller vboxvga --hwvirtex off
+	@VBoxManage storagectl "$(VBOX_VM_NAME)" --name "Floppy" --add floppy
+	@VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl "Floppy" --port 0 --device 0 --type fdd --medium "$(abspath $(BUILD_DIR)/main_floppy.img)"
+	@echo "Starting VirtualBox..."
+	@VBoxManage startvm "$(VBOX_VM_NAME)"
+
+run-vbox-iso: $(BUILD_DIR)/main.iso
+	@echo "Setting up VirtualBox VM (ISO)..."
+	@VBoxManage showvminfo "$(VBOX_VM_NAME)" > /dev/null 2>&1 && VBoxManage unregistervm "$(VBOX_VM_NAME)" --delete || true
+	@VBoxManage createvm --name "$(VBOX_VM_NAME)" --ostype Other --register
+	@VBoxManage modifyvm "$(VBOX_VM_NAME)" --memory 32 --vram 16 --graphicscontroller vboxvga --hwvirtex off
+	@VBoxManage storagectl "$(VBOX_VM_NAME)" --name "IDE" --add ide
+	@VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl "IDE" --port 0 --device 0 --type dvddrive --medium "$(abspath $(BUILD_DIR)/main.iso)"
+	@echo "Starting VirtualBox..."
+	@VBoxManage startvm "$(VBOX_VM_NAME)"

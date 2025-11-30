@@ -339,10 +339,76 @@ main() {
         echo "  - ${TARGET}-objdump  (Object file disassembler)"
         echo "  - ${TARGET}-ar       (Archive tool)"
         echo ""
+        
+        # Setup VirtualBox
+        setup_virtualbox
     else
         print_error "Toolchain verification failed"
         exit 1
     fi
+}
+
+# Check and setup VirtualBox
+setup_virtualbox() {
+    echo "========================================"
+    echo "  VirtualBox Setup"
+    echo "========================================"
+    echo ""
+    
+    if command_exists VBoxManage; then
+        print_success "VirtualBox is already installed"
+        VBoxManage --version
+    else
+        print_info "VirtualBox not found. Installing..."
+        
+        # Detect package manager and install
+        if command_exists apt-get; then
+            sudo apt-get update
+            sudo apt-get install -y virtualbox
+        elif command_exists dnf; then
+            sudo dnf install -y VirtualBox
+        elif command_exists pacman; then
+            sudo pacman -S --noconfirm virtualbox virtualbox-host-modules-arch
+        elif command_exists zypper; then
+            sudo zypper install -y virtualbox
+        else
+            print_warning "Could not detect package manager. Please install VirtualBox manually."
+            return 1
+        fi
+        
+        if command_exists VBoxManage; then
+            print_success "VirtualBox installed successfully"
+            VBoxManage --version
+        else
+            print_error "VirtualBox installation failed"
+            return 1
+        fi
+    fi
+    
+    # Load VirtualBox kernel modules
+    print_info "Loading VirtualBox kernel modules..."
+    if sudo modprobe vboxdrv 2>/dev/null; then
+        print_success "VirtualBox kernel modules loaded"
+    else
+        print_warning "Could not load vboxdrv module. You may need to:"
+        echo "  1. Reboot your system"
+        echo "  2. Or run: sudo modprobe vboxdrv"
+    fi
+    
+    # Add user to vboxusers group
+    if ! groups | grep -q vboxusers; then
+        print_info "Adding user to vboxusers group..."
+        sudo usermod -aG vboxusers "$USER"
+        print_warning "You may need to log out and back in for group changes to take effect"
+    fi
+    
+    echo ""
+    print_success "VirtualBox setup complete!"
+    echo ""
+    echo "You can now run your OS with:"
+    echo "  make run-vbox      (floppy image)"
+    echo "  make run-vbox-iso  (ISO image)"
+    echo ""
 }
 
 # Run main function
