@@ -1,6 +1,8 @@
 #include "i8259.h"
 #include "idt.h"
 #include "isr.h"
+#include "keyboard.h"
+#include "shell.h"
 #include "stdint.h"
 
 #define _cdecl __attribute__((cdecl))
@@ -35,6 +37,12 @@
 static int cursor_row = 0;
 static int cursor_col = 0;
 static volatile uint8_t *video_memory = (volatile uint8_t *)VGA_MEMORY;
+
+// Cursor accessors for shell
+int get_cursor_row(void) { return cursor_row; }
+int get_cursor_col(void) { return cursor_col; }
+void set_cursor_row(int row) { cursor_row = row; }
+void set_cursor_col(int col) { cursor_col = col; }
 
 // Scroll the screen content up by one line
 void scroll_screen(void) {
@@ -80,6 +88,12 @@ void kputc(char c, uint8_t color) {
     cursor_row++;
   } else if (c == '\r') {
     cursor_col = 0;
+  } else if (c == '\b') {
+    // Backspace: move cursor back and clear character
+    if (cursor_col > 0) {
+      cursor_col--;
+      putchar_at(' ', color, cursor_col, cursor_row);
+    }
   } else {
     putchar_at(c, color, cursor_col, cursor_row);
     cursor_col++;
@@ -145,6 +159,9 @@ void _cdecl start(uint16_t bootDrive) {
   // Enable interrupts
   __asm__ volatile("sti");
 
+  // Initialize keyboard
+  keyboard_init();
+
   // Print kernel header
   kprint_line('=', 50, header_color);
   knewline();
@@ -188,14 +205,9 @@ void _cdecl start(uint16_t bootDrive) {
   knewline();
   knewline();
 
-  // Print final message
-  kprint("Hello world from kernel!",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-  knewline();
-  knewline();
-  kprint("Kernel is now idle. Press Ctrl+Alt+Del to reboot.", detail_color);
+  // Initialize shell
+  shell_init();
 
-  // Halt the CPU
-  for (;;)
-    ;
+  // Run shell (never returns)
+  shell_run();
 }
