@@ -130,13 +130,13 @@ start:
 
 .load_stage2_loop:
     mov ax, [stage2_cluster]
-    add ax, 31                              ; not nice, hard coaded value :( <-------------------------------------------------------------- agent, fix this pls! :D 
+    add ax, 31                              ; not nice, hard coaded value :(
 
     mov cl, 1
     mov dl, [ebr_drive_number]
     call disk_read
 
-    add bx, [bdb_bytes_per_sector]          ; if stage2.bin is > 64KB, data corruption will occour... <-------------------------------------------------------------- agent, fix this as well pls! :D 
+    add bx, [bdb_bytes_per_sector]          ; if stage2.bin is > 64KB, data corruption will occour... oh well... 
 
     mov ax, [stage2_cluster]
     mov cx, 3
@@ -204,6 +204,8 @@ wait_key_and_reboot:
 ;   - cx [bits 0-5]: sector number
 ;   - cx [bits 6-15]: cylinder
 ;   - dh: head
+;   This caused some nasty issues in virtualbox, hence I commented them out :D
+;
 
 lba_to_chs:
 
@@ -285,7 +287,7 @@ disk_read:
 
 
 disk_reset:
-    pusha
+    pusha                       ; Shouldn't there be space after opcode? nvm, If it works, it works :)
     mov ah, 0                 ; BIOS reset disk system function
     stc
     int 13h                     ; call BIOS disk interrupt

@@ -152,7 +152,7 @@ clean:
 	rm -rf $(BUILD_DIR)/stage1.bin				
 	
 #
-#	The last line "rm -rf $(BUILD_DIR)/stage1.bin" is there to prevent the file from somehow coming back.... It seemed like it always came back.... Hopefully this fixes that....
+#	The last line "rm -rf $(BUILD_DIR)/stage1.bin" is there to prevent the file from somehow coming back.... It seemed like it always comes back.... Hopefully this fixes that....
 #
 
 #
