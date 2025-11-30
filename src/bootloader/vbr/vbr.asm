@@ -23,7 +23,7 @@ bdb_sectors_per_fat:        dw 9                    ; sectors per FAT
 bdb_sectors_per_track:      dw 18                   ; sectors per track
 bdb_heads:                  dw 2                    ; number of heads
 bdb_hidden_sectors:         dd 0                    ; hidden sectors
-bdb_large_sector_count:     dd 0                    ; total sectors (for disks >=
+bdb_large_sector_count:     dd 0                    ; total sectors (for disks >=)
 
 
 ; extended boot record 
