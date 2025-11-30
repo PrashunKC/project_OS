@@ -11,7 +11,28 @@ My journey of scouring the depths of the internet to learn and build my very own
 
 **Expected output:**
 ```
+==================================================
+          KERNEL STARTED SUCCESSFULLY
+==================================================
+
+[INFO] Kernel loaded and running in 32-bit protected mode
+[INFO] VGA text mode initialized (80x25)
+[INFO] Video memory at 0xB8000
+
+[OK] System initialization complete
+
+--------------------------------------------------
+System Details:
+  - Architecture: x86 (i386)
+  - Mode: 32-bit Protected Mode
+  - Kernel Address: 0x100000 (1MB)
+  - Version: 1.0.0
+  - Build Date: 2025-11-30
+--------------------------------------------------
+
 Hello world from kernel!
+
+Kernel is now idle. Press Ctrl+Alt+Del to reboot.
 ```
 
 **What this demonstrates:**
@@ -20,8 +41,10 @@ Hello world from kernel!
 - ✅ C code executing in 16-bit real mode
 - ✅ BIOS interrupts accessible from C
 - ✅ Kernel loading and execution
+- ✅ Enhanced logging with log levels (INFO, OK, ERROR, DEBUG)
+- ✅ VGA text mode with color support in kernel
 
-**Current status:** Stage 1 and Stage 2 bootloaders complete. Kernel loading implemented.
+**Current status:** Stage 1 and Stage 2 bootloaders complete. Kernel loading implemented with enhanced logging.
 
 ## Table of Contents
 1. [Project Overview](#project-overview)
@@ -6112,13 +6135,20 @@ Happy OS development! 🚀
 
 ---
 
-*Last updated: November 20, 2025*  
+*Last updated: November 30, 2025*  
 *Project phase: Two-stage bootloader with C integration (✅ Complete)*  
 *Enhanced documentation: Comprehensive theory, implementation, and alternatives*  
 *README enhancements: +2000 lines of detailed explanations, diagrams, and design rationale*  
-*Next milestone: Kernel loading and protected mode transition*  
+*Next milestone: Interrupt handling (IDT) and memory management*  
 *Lines of code: ~900 (assembly + C + build system)*  
-*Current binary size: Stage 1: 512 bytes | Stage 2: ~34 bytes (will grow) | Kernel: ~1 KB*
+*Current binary size: Stage 1: 512 bytes | Stage 2: ~2KB | Kernel: ~2 KB*
 
+## Changelog
 
-//need to update this all after I finish this 🥲
+### Version 1.0.0 (2025-11-30)
+- **Added**: Enhanced logging system with log levels (INFO, OK, ERROR, DEBUG)
+- **Added**: Detailed boot process logging in Stage 2 bootloader
+- **Added**: VGA text mode helper functions in kernel
+- **Added**: Color-coded kernel output with system details
+- **Updated**: Kernel with comprehensive system information display
+- **Updated**: README with current project status and changelog
