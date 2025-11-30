@@ -11,7 +11,7 @@ TARGET_CFLAGS += -ffreestanding -O2 -Wall -Wextra -std=c99
 TARGET_LINKFLAGS += -T linker.ld -nostdlib
 
 SOURCES_C=$(wildcard *.c)
-SOURCES_ASM=entry.asm
+SOURCES_ASM=entry.asm interrupts.asm
 OBJECTS_C=$(patsubst %.c,$(BUILD_DIR)/kernel/c/%.o, $(SOURCES_C))
 OBJECTS_ASM=$(patsubst %.asm,$(BUILD_DIR)/kernel/asm/%.o, $(SOURCES_ASM))
 
