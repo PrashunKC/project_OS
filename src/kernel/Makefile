@@ -12,8 +12,8 @@ CC_CROSS := gcc
 LD_CROSS := ld
 
 # 64-bit compilation flags
-TARGET_CFLAGS += -ffreestanding -O2 -Wall -Wextra -std=c99 -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2
-TARGET_LINKFLAGS += -T linker.ld -nostdlib -m elf_x86_64
+TARGET_CFLAGS += -ffreestanding -O2 -Wall -Wextra -std=c99 -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2 -fno-pie -fno-pic
+TARGET_LINKFLAGS += -T linker.ld -nostdlib -m elf_x86_64 -no-pie
 
 SOURCES_C=$(filter-out idt64.c isr64.c, $(wildcard *.c))
 SOURCES_ASM=entry.asm interrupts.asm
