@@ -5,6 +5,7 @@ build/
 *.bin
 *.img
 *.iso
+*.elf
 
 # Editor files
 *.swp
@@ -19,3 +20,19 @@ _codeql_detected_source_root
 # Temporary files
 *.tmp
 *.log
+*.err
+build_output.txt
+
+# VirtualBox logs
+vbox_*.txt
+vbox_log_*
+
+# GRUB ISO temp directory
+iso/
+
+# SDK build artifacts (lib/*.o is built, not source)
+sdk/lib/*.o
+
+# Misc
+*.bak
+*.orig

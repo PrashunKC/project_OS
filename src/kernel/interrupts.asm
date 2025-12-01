@@ -1,4 +1,4 @@
-[bits 32]
+[bits 64]
 
 ; Defined in idt.c
 extern idt_ptr
@@ -63,78 +63,130 @@ idt_load:
     lidt [idt_ptr]
     ret
 
-; Common ISR stub
+; Common ISR stub for 64-bit mode
 isr_common_stub:
-    pusha               ; Pushes edi,esi,ebp,esp,ebx,edx,ecx,eax
+    ; Save all general purpose registers
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
 
-    mov ax, ds          ; Lower 16-bits of eax = ds.
-    push eax            ; save the data segment descriptor
-
-    mov ax, 0x10        ; load the kernel data segment descriptor
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    push esp            ; Pass pointer to stack frame as argument
+    ; Pass pointer to stack frame as first argument (RDI in System V ABI)
+    mov rdi, rsp
+    
+    ; Align stack to 16 bytes (required by System V ABI)
+    mov rbp, rsp
+    and rsp, ~0xF
+    
     call isr_handler
-    add esp, 4          ; Clean up the pointer argument
+    
+    ; Restore stack
+    mov rsp, rbp
 
-    pop eax             ; reload the original data segment descriptor
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    ; Restore all registers
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
 
-    popa                ; Pops edi,esi,ebp...
-    add esp, 8          ; Cleans up the pushed error code and pushed ISR number
-    iret                ; pops 5 things at once: CS, EIP, EFLAGS, SS, and ESP
+    ; Remove error code and interrupt number from stack
+    add rsp, 16
 
-; Common IRQ stub
+    iretq
+
+; Common IRQ stub for 64-bit mode
 irq_common_stub:
-    pusha
+    ; Save all general purpose registers
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
 
-    mov ax, ds
-    push eax
-
-    mov ax, 0x10
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
-
-    push esp
+    ; Pass pointer to stack frame as first argument (RDI in System V ABI)
+    mov rdi, rsp
+    
+    ; Align stack to 16 bytes
+    mov rbp, rsp
+    and rsp, ~0xF
+    
     call irq_handler
-    add esp, 4
+    
+    ; Restore stack
+    mov rsp, rbp
 
-    pop eax
-    mov ds, ax
-    mov es, ax
-    mov fs, ax
-    mov gs, ax
+    ; Restore all registers
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax
 
-    popa
-    add esp, 8
-    iret
+    ; Remove error code and interrupt number from stack
+    add rsp, 16
+
+    iretq
 
 ; Macros to define ISRs
 %macro ISR_NOERRCODE 1
 isr%1:
-    push byte 0
-    push byte %1
+    push qword 0        ; Push dummy error code
+    push qword %1       ; Push interrupt number
     jmp isr_common_stub
 %endmacro
 
 %macro ISR_ERRCODE 1
 isr%1:
-    push byte %1
+    push qword %1       ; Push interrupt number (error code already on stack)
     jmp isr_common_stub
 %endmacro
 
 %macro IRQ 2
 irq%1:
-    push byte 0
-    push byte %2
+    push qword 0        ; Push dummy error code
+    push qword %2       ; Push interrupt number
     jmp irq_common_stub
 %endmacro
 

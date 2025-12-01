@@ -7,10 +7,15 @@ all: kernel
 # Include toolchain definitions (relative to project root)
 include ../../build_scripts/toolchain.mk
 
-TARGET_CFLAGS += -ffreestanding -O2 -Wall -Wextra -std=c99
-TARGET_LINKFLAGS += -T linker.ld -nostdlib
+# 64-bit kernel build configuration
+CC_CROSS := gcc
+LD_CROSS := ld
 
-SOURCES_C=$(wildcard *.c)
+# 64-bit compilation flags
+TARGET_CFLAGS += -ffreestanding -O2 -Wall -Wextra -std=c99 -m64 -mcmodel=kernel -mno-red-zone -mno-mmx -mno-sse -mno-sse2
+TARGET_LINKFLAGS += -T linker.ld -nostdlib -m elf_x86_64
+
+SOURCES_C=$(filter-out idt64.c isr64.c, $(wildcard *.c))
 SOURCES_ASM=entry.asm interrupts.asm
 OBJECTS_C=$(patsubst %.c,$(BUILD_DIR)/kernel/c/%.o, $(SOURCES_C))
 OBJECTS_ASM=$(patsubst %.asm,$(BUILD_DIR)/kernel/asm/%.o, $(SOURCES_ASM))
@@ -21,14 +26,17 @@ all: kernel
 
 kernel: $(BUILD_DIR)/kernel.bin
 
-$(BUILD_DIR)/kernel.bin: $(OBJECTS_ASM) $(OBJECTS_C)
+$(BUILD_DIR)/kernel.bin: $(BUILD_DIR)/kernel.elf
+	objcopy -O binary $< $@
+
+$(BUILD_DIR)/kernel.elf: $(OBJECTS_ASM) $(OBJECTS_C)
 	$(LD_CROSS) $(TARGET_LINKFLAGS) -o $@ $(OBJECTS_ASM) $(OBJECTS_C)
 
 $(BUILD_DIR)/kernel/c/%.o: %.c always
 	$(CC_CROSS) $(TARGET_CFLAGS) -c -o $@ $<
 
 $(BUILD_DIR)/kernel/asm/%.o: %.asm always
-	$(ASM) -f elf -o $@ $<
+	$(ASM) -f elf64 -o $@ $<
 
 always:
 	mkdir -p $(BUILD_DIR)/kernel/c

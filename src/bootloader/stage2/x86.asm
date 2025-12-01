@@ -375,6 +375,130 @@ pmode32_entry:
     push edx                ; Push return address onto PM stack
     ret
 
+; ------------------------------------------------------------------------------
+; x86_Int10
+; void x86_Int10(Registers16* regs);
+; Performs a BIOS INT 10h call with the given register values
+; ------------------------------------------------------------------------------
+global x86_Int10
+
+x86_Int10:
+    push ebp
+    mov ebp, esp
+    push ebx
+    push esi
+    push edi
+    push es
+    push ds
+
+    ; Get pointer to Registers16 struct
+    mov esi, [ebp + 8]
+
+    ; Load registers from struct
+    ; struct { ax, bx, cx, dx, si, di, es, ds, flags }
+    mov ax, [esi + 0]       ; ax
+    mov [g_RegAX], ax
+    mov ax, [esi + 2]       ; bx
+    mov [g_RegBX], ax
+    mov ax, [esi + 4]       ; cx
+    mov [g_RegCX], ax
+    mov ax, [esi + 6]       ; dx
+    mov [g_RegDX], ax
+    mov ax, [esi + 8]       ; si
+    mov [g_RegSI], ax
+    mov ax, [esi + 10]      ; di
+    mov [g_RegDI], ax
+    mov ax, [esi + 12]      ; es
+    mov [g_RegES], ax
+    mov ax, [esi + 14]      ; ds
+    mov [g_RegDS], ax
+
+    ; Save struct pointer for later
+    mov [g_RegsPtr], esi
+
+    call x86_EnterRealMode
+    
+    [bits 16]
+    ; Load all registers from saved values
+    a32 mov ax, [g_RegES]
+    mov es, ax
+    a32 mov ax, [g_RegDS]
+    push ax                 ; Save DS for later (need DS=0 for variable access)
+    
+    a32 mov ax, [g_RegAX]
+    a32 mov bx, [g_RegBX]
+    a32 mov cx, [g_RegCX]
+    a32 mov dx, [g_RegDX]
+    a32 mov si, [g_RegSI]
+    a32 mov di, [g_RegDI]
+    
+    ; Restore DS just before interrupt
+    pop ds
+    
+    ; Call INT 10h
+    int 0x10
+    
+    ; Save DS temporarily (we need DS=0 to access variables)
+    push ds
+    xor bp, bp
+    mov ds, bp
+    
+    ; Save all results back
+    a32 mov [g_RegAX], ax
+    a32 mov [g_RegBX], bx
+    a32 mov [g_RegCX], cx
+    a32 mov [g_RegDX], dx
+    a32 mov [g_RegSI], si
+    a32 mov [g_RegDI], di
+    
+    ; Save ES
+    mov ax, es
+    a32 mov [g_RegES], ax
+    
+    ; Save DS (pop what we pushed)
+    pop ax
+    a32 mov [g_RegDS], ax
+    
+    ; Save flags
+    pushf
+    pop ax
+    a32 mov [g_RegFlags], ax
+    
+    call x86_EnterProtectedMode
+    [bits 32]
+
+    ; Store results back to struct
+    mov esi, [g_RegsPtr]
+    
+    mov ax, [g_RegAX]
+    mov [esi + 0], ax
+    mov ax, [g_RegBX]
+    mov [esi + 2], ax
+    mov ax, [g_RegCX]
+    mov [esi + 4], ax
+    mov ax, [g_RegDX]
+    mov [esi + 6], ax
+    mov ax, [g_RegSI]
+    mov [esi + 8], ax
+    mov ax, [g_RegDI]
+    mov [esi + 10], ax
+    mov ax, [g_RegES]
+    mov [esi + 12], ax
+    mov ax, [g_RegDS]
+    mov [esi + 14], ax
+    mov ax, [g_RegFlags]
+    mov [esi + 16], ax
+
+    pop ds
+    pop es
+    pop edi
+    pop esi
+    pop ebx
+    mov esp, ebp
+    pop ebp
+    ret
+
+
 section .data
 saved_esp: dd 0
 RealModeIDT: dw 0x3FF
@@ -397,4 +521,8 @@ g_RegBX: dw 0
 g_RegCX: dw 0
 g_RegDX: dw 0
 g_RegES: dw 0
+g_RegDS: dw 0
+g_RegSI: dw 0
+g_RegDI: dw 0
 g_RegFlags: dw 0
+g_RegsPtr: dd 0

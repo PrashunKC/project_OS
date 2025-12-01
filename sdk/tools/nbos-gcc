@@ -1,0 +1,127 @@
+#!/bin/bash
+# NBOS GCC Wrapper
+# Compiles C programs for NBOS
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SDK_DIR="$(dirname "$SCRIPT_DIR")"
+INCLUDE_DIR="$SDK_DIR/include"
+LIB_DIR="$SDK_DIR/lib"
+
+# Default compiler (use cross compiler if available)
+if command -v x86_64-elf-gcc &> /dev/null; then
+    CC="x86_64-elf-gcc"
+    LD="x86_64-elf-ld"
+elif command -v gcc &> /dev/null; then
+    CC="gcc"
+    LD="ld"
+else
+    echo "Error: No suitable compiler found"
+    exit 1
+fi
+
+# Parse arguments
+OUTPUT=""
+SOURCES=()
+COMPILE_ONLY=0
+EXTRA_FLAGS=""
+
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        -o)
+            OUTPUT="$2"
+            shift 2
+            ;;
+        -c)
+            COMPILE_ONLY=1
+            shift
+            ;;
+        -I*)
+            EXTRA_FLAGS="$EXTRA_FLAGS $1"
+            shift
+            ;;
+        -D*)
+            EXTRA_FLAGS="$EXTRA_FLAGS $1"
+            shift
+            ;;
+        -*)
+            # Unknown flag, pass through
+            EXTRA_FLAGS="$EXTRA_FLAGS $1"
+            shift
+            ;;
+        *)
+            SOURCES+=("$1")
+            shift
+            ;;
+    esac
+done
+
+if [ ${#SOURCES[@]} -eq 0 ]; then
+    echo "Usage: nbos-gcc [-o output] [-c] source.c ..."
+    echo ""
+    echo "Options:"
+    echo "  -o output    Output file name"
+    echo "  -c           Compile only, do not link"
+    echo ""
+    echo "Example:"
+    echo "  nbos-gcc -o hello.bin hello.c"
+    exit 1
+fi
+
+# Compiler flags for NBOS
+CFLAGS="-ffreestanding -O2 -Wall -Wextra -std=c99"
+CFLAGS="$CFLAGS -m64 -mcmodel=large -mno-red-zone"
+CFLAGS="$CFLAGS -mno-mmx -mno-sse -mno-sse2"
+CFLAGS="$CFLAGS -fno-stack-protector -fno-pic"
+CFLAGS="$CFLAGS -I$INCLUDE_DIR"
+
+# Linker flags
+LDFLAGS="-nostdlib -static"
+
+if [ $COMPILE_ONLY -eq 1 ]; then
+    # Just compile
+    for src in "${SOURCES[@]}"; do
+        if [ -z "$OUTPUT" ]; then
+            obj="${src%.c}.o"
+        else
+            obj="$OUTPUT"
+        fi
+        echo "$CC $CFLAGS $EXTRA_FLAGS -c -o $obj $src"
+        $CC $CFLAGS $EXTRA_FLAGS -c -o "$obj" "$src"
+    done
+else
+    # Compile and link
+    OBJECTS=()
+    for src in "${SOURCES[@]}"; do
+        if [[ "$src" == *.c ]]; then
+            obj="${src%.c}.o"
+            echo "$CC $CFLAGS $EXTRA_FLAGS -c -o $obj $src"
+            $CC $CFLAGS $EXTRA_FLAGS -c -o "$obj" "$src"
+            OBJECTS+=("$obj")
+        else
+            OBJECTS+=("$src")
+        fi
+    done
+    
+    # Determine output name
+    if [ -z "$OUTPUT" ]; then
+        OUTPUT="a.out"
+    fi
+    
+    # Link with CRT if available
+    CRT0=""
+    if [ -f "$LIB_DIR/crt0.o" ]; then
+        CRT0="$LIB_DIR/crt0.o"
+    fi
+    
+    echo "$LD $LDFLAGS -o $OUTPUT $CRT0 ${OBJECTS[*]}"
+    $LD $LDFLAGS -o "$OUTPUT" $CRT0 "${OBJECTS[@]}"
+    
+    # Clean up object files
+    for obj in "${OBJECTS[@]}"; do
+        if [[ "$obj" == *.o ]] && [ -f "$obj" ]; then
+            rm -f "$obj"
+        fi
+    done
+fi
+
+echo "Done: $OUTPUT"

@@ -1,33 +1,31 @@
-ENTRY(start)
-OUTPUT_FORMAT("binary")
-PHYSICAL_BASE = 0x100000;
+ENTRY(_start)
+OUTPUT_FORMAT(elf64-x86-64)
 
 SECTIONS
 {
-    . = PHYSICAL_BASE;
+    . = 1M;
 
-    .entry :
+    .text ALIGN(4) : AT(ADDR(.text))
     {
-        *(.entry)
-    }
-
-    .text :
-    {
+        *(.multiboot)  /* Multiboot header first */
+        . = ALIGN(16);
         *(.text)
     }
 
-    .data :
+    .rodata ALIGN(4K) : AT(ADDR(.rodata))
+    {
+        *(.rodata*)
+        *(.eh_frame)
+    }
+
+    .data ALIGN(4K) : AT(ADDR(.data))
     {
         *(.data)
     }
 
-    .rodata :
+    .bss ALIGN(4K) : AT(ADDR(.bss))
     {
-        *(.rodata)
-    }
-
-    .bss :
-    {
+        *(COMMON)
         *(.bss)
     }
 }

@@ -4,19 +4,18 @@
 # Toolchain configuration
 TOOLCHAIN_DIR ?= $(HOME)/opt/cross
 TARGET_PREFIX ?= i686-elf
-TOOLCHAIN_SETUP_SCRIPT := $(shell dirname $(lastword $(MAKEFILE_LIST)))/setup_toolchain.sh
 
 # Toolchain binaries
 export PATH := $(TOOLCHAIN_DIR)/bin:$(PATH)
 
-# Cross-compiler tools
-CC_CROSS = $(TARGET_PREFIX)-gcc
-CXX_CROSS = $(TARGET_PREFIX)-g++
-AS_CROSS = $(TARGET_PREFIX)-as
-LD_CROSS = $(TARGET_PREFIX)-ld
-AR_CROSS = $(TARGET_PREFIX)-ar
-OBJCOPY = $(TARGET_PREFIX)-objcopy
-OBJDUMP = $(TARGET_PREFIX)-objdump
+# Cross-compiler tools (fallback to host if not available)
+CC_CROSS = $(shell command -v $(TARGET_PREFIX)-gcc 2>/dev/null || echo gcc)
+CXX_CROSS = $(shell command -v $(TARGET_PREFIX)-g++ 2>/dev/null || echo g++)
+AS_CROSS = $(shell command -v $(TARGET_PREFIX)-as 2>/dev/null || echo as)
+LD_CROSS = $(shell command -v $(TARGET_PREFIX)-ld 2>/dev/null || echo ld)
+AR_CROSS = $(shell command -v $(TARGET_PREFIX)-ar 2>/dev/null || echo ar)
+OBJCOPY = $(shell command -v $(TARGET_PREFIX)-objcopy 2>/dev/null || echo objcopy)
+OBJDUMP = $(shell command -v $(TARGET_PREFIX)-objdump 2>/dev/null || echo objdump)
 
 # Check if toolchain is available
 TOOLCHAIN_GCC := $(shell command -v $(CC_CROSS) 2>/dev/null)

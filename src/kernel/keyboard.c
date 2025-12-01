@@ -39,6 +39,44 @@ static const char scancode_to_ascii_shift[] = {
 static uint8_t shift_pressed = 0;
 static uint8_t caps_lock = 0;
 
+// Simple key buffer for polling
+#define KEY_BUFFER_SIZE 32
+static volatile char key_buffer[KEY_BUFFER_SIZE];
+static volatile int key_buffer_head = 0;
+static volatile int key_buffer_tail = 0;
+
+// Add key to buffer
+static void key_buffer_push(char c) {
+  int next = (key_buffer_head + 1) % KEY_BUFFER_SIZE;
+  if (next != key_buffer_tail) {
+    key_buffer[key_buffer_head] = c;
+    key_buffer_head = next;
+  }
+}
+
+// Check if key available
+int keyboard_has_key(void) {
+  return key_buffer_head != key_buffer_tail;
+}
+
+// Get key (blocking)
+char keyboard_get_key(void) {
+  while (!keyboard_has_key()) {
+    __asm__ volatile("hlt");
+  }
+  char c = key_buffer[key_buffer_tail];
+  key_buffer_tail = (key_buffer_tail + 1) % KEY_BUFFER_SIZE;
+  return c;
+}
+
+// Get key (non-blocking)
+char keyboard_get_key_nonblocking(void) {
+  if (!keyboard_has_key()) return 0;
+  char c = key_buffer[key_buffer_tail];
+  key_buffer_tail = (key_buffer_tail + 1) % KEY_BUFFER_SIZE;
+  return c;
+}
+
 // Keyboard interrupt handler
 void keyboard_handler(Registers *regs) {
   (void)regs; // Unused parameter
@@ -72,10 +110,14 @@ void keyboard_handler(Registers *regs) {
       return;
     }
 
-    // Arrow keys (extended scancodes: Up=0x48, Down=0x50, Left=0x4B, Right=0x4D)
-    // Also block non-extended arrow scancodes (same codes used by numpad without NumLock)
-    if (scancode == 0x48 || scancode == 0x50 || scancode == 0x4B || scancode == 0x4D) {
-      // Ignore arrow keys for now
+    // Arrow keys (extended scancodes: Up=0x48, Down=0x50, Left=0x4B,
+    // Right=0x4D) Also block non-extended arrow scancodes (same codes used by
+    // numpad without NumLock) Arrow keys (extended scancodes: Up=0x48,
+    // Down=0x50, Left=0x4B, Right=0x4D) Also block non-extended arrow scancodes
+    // (same codes used by numpad without NumLock)
+    if (scancode == 0x48 || scancode == 0x50 || scancode == 0x4B ||
+        scancode == 0x4D) {
+      shell_handle_arrow(scancode);
       extended = 0;
       return;
     }
@@ -104,6 +146,7 @@ void keyboard_handler(Registers *regs) {
 
       // Print character if valid
       if (c != 0) {
+        key_buffer_push(c);  // Also add to buffer for polling
         shell_putchar(c);
       }
     }

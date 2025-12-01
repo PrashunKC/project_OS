@@ -1,20 +1,24 @@
 #pragma once
 #include "stdint.h"
 
-// Registers structure to capture CPU state
+// 64-bit Registers structure to capture CPU state
 typedef struct {
-  uint32_t ds;                                     // Data segment selector
-  uint32_t edi, esi, ebp, esp, ebx, edx, ecx, eax; // Pushed by pusha
-  uint32_t int_no, err_code; // Interrupt number and error code (if applicable)
-  uint32_t eip, cs, eflags, useresp,
-      ss; // Pushed by the processor automatically
+  // General purpose registers (pushed by our stub)
+  uint64_t r15, r14, r13, r12, r11, r10, r9, r8;
+  uint64_t rbp, rdi, rsi, rdx, rcx, rbx, rax;
+  
+  // Interrupt number and error code
+  uint64_t int_no, err_code;
+  
+  // Pushed by the processor automatically
+  uint64_t rip, cs, rflags, rsp, ss;
 } __attribute__((packed)) Registers;
 
 // ISR handler function prototype
 void isr_handler(Registers *regs);
 void irq_handler(Registers *regs);
 
-// Function to register interrupt handlers (for future use)
+// Function to register interrupt handlers
 typedef void (*ISRHandler)(Registers *regs);
 void register_interrupt_handler(uint8_t n, ISRHandler handler);
 void isr_init();

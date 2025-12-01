@@ -11,3 +11,9 @@ bool _cdecl x86_Disk_Reset(uint8_t drive);
 bool _cdecl x86_Disk_Read(uint8_t drive, uint16_t cylinder, uint16_t sector, uint16_t head, uint8_t count, void* dataOut);
 
 bool _cdecl x86_Disk_GetDriveParams(uint8_t drive, uint8_t* driveTypeOut, uint16_t* cylindersOut, uint16_t* sectorsOut, uint16_t* headsOut);
+
+typedef struct {
+    uint16_t ax, bx, cx, dx, si, di, es, ds, flags;
+} Registers16;
+
+void x86_Int10(Registers16* regs);

@@ -43,12 +43,35 @@ $(BUILD_DIR)/main_floppy.img: bootloader stage2 kernel
 #
 iso: $(BUILD_DIR)/main.iso
 
-$(BUILD_DIR)/main.iso: $(BUILD_DIR)/main_floppy.img
+$(BUILD_DIR)/main.iso: $(BUILD_DIR)/main_floppy.img sdk
 	mkdir -p $(BUILD_DIR)/iso
 	cp $(BUILD_DIR)/main_floppy.img $(BUILD_DIR)/iso/
+	cp -r sdk $(BUILD_DIR)/iso/
 	xorriso -as mkisofs -b main_floppy.img \
+		-c boot.cat \
 		-o $(BUILD_DIR)/main.iso \
 		$(BUILD_DIR)/iso
+	rm -rf $(BUILD_DIR)/iso
+
+#
+#	SDK (Software Development Kit)
+#
+sdk: $(BUILD_DIR)/sdk
+
+$(BUILD_DIR)/sdk: always
+	mkdir -p $(BUILD_DIR)/sdk
+	cp -r sdk/* $(BUILD_DIR)/sdk/
+	# Build CRT0
+	nasm -f elf64 -o $(BUILD_DIR)/sdk/lib/crt0.o sdk/lib/crt0.asm
+	@echo "SDK built successfully"
+
+#
+#	GRUB ISO image (for Multiboot graphics)
+#
+grub-iso: kernel
+	mkdir -p iso/boot/grub
+	cp $(BUILD_DIR)/kernel.bin iso/boot/kernel.bin
+	grub2-mkrescue -o $(BUILD_DIR)/project_os.iso iso/
 
 #
 #	ISO image (no emulation mode)
@@ -164,18 +187,37 @@ run-vbox: $(BUILD_DIR)/main_floppy.img
 	@echo "Setting up VirtualBox VM..."
 	@VBoxManage showvminfo "$(VBOX_VM_NAME)" > /dev/null 2>&1 && VBoxManage unregistervm "$(VBOX_VM_NAME)" --delete || true
 	@VBoxManage createvm --name "$(VBOX_VM_NAME)" --ostype Other --register
-	@VBoxManage modifyvm "$(VBOX_VM_NAME)" --memory 32 --vram 16 --graphicscontroller vboxvga --hwvirtex off
+	@VBoxManage modifyvm "$(VBOX_VM_NAME)" --memory 128 --vram 16 --graphicscontroller vboxvga --hwvirtex on --longmode on
 	@VBoxManage storagectl "$(VBOX_VM_NAME)" --name "Floppy" --add floppy
 	@VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl "Floppy" --port 0 --device 0 --type fdd --medium "$(abspath $(BUILD_DIR)/main_floppy.img)"
 	@echo "Starting VirtualBox..."
 	@VBoxManage startvm "$(VBOX_VM_NAME)"
 
-run-vbox-iso: $(BUILD_DIR)/main.iso
-	@echo "Setting up VirtualBox VM (ISO)..."
-	@VBoxManage showvminfo "$(VBOX_VM_NAME)" > /dev/null 2>&1 && VBoxManage unregistervm "$(VBOX_VM_NAME)" --delete || true
-	@VBoxManage createvm --name "$(VBOX_VM_NAME)" --ostype Other --register
-	@VBoxManage modifyvm "$(VBOX_VM_NAME)" --memory 32 --vram 16 --graphicscontroller vboxvga --hwvirtex off
-	@VBoxManage storagectl "$(VBOX_VM_NAME)" --name "IDE" --add ide
-	@VBoxManage storageattach "$(VBOX_VM_NAME)" --storagectl "IDE" --port 0 --device 0 --type dvddrive --medium "$(abspath $(BUILD_DIR)/main.iso)"
+run-vbox-iso: iso
+	@echo "Setting up VirtualBox VM for ISO boot..."
+	-VBoxManage unregistervm "NBOS_ISO" --delete 2>/dev/null || true
+	VBoxManage createvm --name "NBOS_ISO" --ostype "Other_64" --register
+	VBoxManage modifyvm "NBOS_ISO" --memory 128 --vram 64 --graphicscontroller vboxvga --cpus 1 --hwvirtex on --longmode on
+	VBoxManage storagectl "NBOS_ISO" --name "IDE" --add ide
+	VBoxManage storageattach "NBOS_ISO" --storagectl "IDE" --port 0 --device 0 --type dvddrive --medium $(abspath $(BUILD_DIR)/main.iso)
 	@echo "Starting VirtualBox..."
-	@VBoxManage startvm "$(VBOX_VM_NAME)"
+	VBoxManage startvm "NBOS_ISO"
+
+# Run GRUB ISO in VirtualBox
+run-grub-vbox: grub-iso
+	@echo "Setting up VirtualBox VM for GRUB ISO..."
+	-VBoxManage unregistervm "NBOS_GRUB" --delete 2>/dev/null || true
+	VBoxManage createvm --name "NBOS_GRUB" --ostype "Other" --register
+	VBoxManage modifyvm "NBOS_GRUB" --memory 128 --vram 16 --cpus 1
+	VBoxManage storagectl "NBOS_GRUB" --name "IDE" --add ide
+	VBoxManage storageattach "NBOS_GRUB" --storagectl "IDE" --port 0 --device 0 --type dvddrive --medium $(abspath $(BUILD_DIR)/project_os.iso)
+	@echo "Starting VirtualBox..."
+	VBoxManage startvm "NBOS_GRUB"
+
+# Test Multiboot kernel with QEMU (direct kernel boot)
+qemu-test: kernel
+	qemu-system-i386 -kernel $(BUILD_DIR)/kernel.bin -serial stdio
+
+# Test GRUB ISO with QEMU
+qemu-grub: grub-iso
+	qemu-system-i386 -cdrom $(BUILD_DIR)/project_os.iso -serial stdio

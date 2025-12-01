@@ -61,7 +61,7 @@ start:
     push es
     mov ah, 08h
     int 13h
-    jc floppy_error
+    jc floppy_error_params
     pop es
 
     and cl, 0x3F
@@ -71,6 +71,7 @@ start:
     inc dh
     mov [bdb_heads], dh
 
+    ; compute LBA of root directory = reserved + number_of_fats * sectors_per_fat
     mov ax, [bdb_sectors_per_fat]
     mov bl, [bdb_fat_count]
     xor bh, bh
@@ -78,7 +79,8 @@ start:
     add ax, [bdb_reserved_sectors]
     push ax
 
-    mov ax, [bdb_sectors_per_fat]
+    ; compute size of root directory = (32 * number_of_entries) / bytes_per_sector
+    mov ax, [bdb_dir_entries_count]
     shl ax, 5
     xor dx, dx
     div word [bdb_bytes_per_sector]
@@ -93,6 +95,7 @@ start:
     mov dl, [ebr_drive_number]
     mov bx, buffer
     call disk_read
+
 
     ; (Removed dynamic data_start computation to keep boot sector <512 bytes.)
 
@@ -131,15 +134,43 @@ start:
     mov bx, stage2_LOAD_OFFSET
 
 .load_stage2_loop:
-    ; LBA for cluster (floppy FAT12): 33 + (cluster-2) == cluster + 31
+    ; LBA for cluster (floppy FAT12): data_start + (cluster-2)
+    ; data_start = reserved + fats + root_dir_size
+    ; we need to calculate this dynamically or save it somewhere.
+    ; For now let's recalculate it or just hardcode it properly if we want to save space?
+    ; No, let's calculate it.
+    ; But wait, we are low on space.
+    ; Let's see.
+    ; reserved (1) + fats (18) + root_dir (14) = 33.
+    ; 33 - 2 = 31.
+    ; Let's compute it once and store it?
+    ; We can reuse a variable we don't need anymore?
+    ; Or just compute it on the fly.
+    
     mov ax, [stage2_cluster]
-    add ax, 31
+    add ax, 31 ; Still hardcoded for now to save space, but let's at least add a comment explaining it.
+               ; TODO: Calculate dynamically: (reserved + fats*sectors_per_fat + root_dir_sectors) - 2
 
     mov cl, 1
     mov dl, [ebr_drive_number]
     call disk_read
 
-    add bx, [bdb_bytes_per_sector]          ; if stage2.bin is > 64KB, data corruption will occour... <-------------------------------------------------------------- agent, fix this as well pls! :D 
+    add bx, [bdb_bytes_per_sector]
+    
+    ; Handle 64KB segment overflow
+    jnc .no_overflow
+    
+    ; If overflow (carry set), increment ES by 0x1000 (64KB / 16)
+    mov ax, es
+    add ax, 0x1000
+    mov es, ax
+    ; BX wrapped around to 0 automatically if it was 16-bit register overflow, 
+    ; but we need to be careful. 
+    ; If we are in 16-bit mode, add bx, 512 might set carry if bx + 512 > 65535.
+    ; The instruction `add bx, [bdb_bytes_per_sector]` will set carry on overflow.
+    ; And bx will be wrapped.
+    
+.no_overflow: 
 
     mov ax, [stage2_cluster]
     mov cx, 3
@@ -182,6 +213,11 @@ start:
 
 floppy_error:
     mov si, msg_read_failed
+    call puts
+    jmp wait_key_and_reboot
+
+floppy_error_params:
+    mov si, msg_params_failed
     call puts
     jmp wait_key_and_reboot
 
@@ -266,7 +302,6 @@ disk_read:
     call disk_reset             ; reset disk system
 
     dec di                      ; decrement retry count
-    test di, di                 ; check if we have retries left
     jnz .retry                  ; if we do, try again
 
 
@@ -322,8 +357,9 @@ puts:
     ret
 
 msg_loading:            db 'Loading...', ENDL, 0
-msg_read_failed:        db 'Read from disk failed!', ENDL, 0
-msg_stage2_not_found:   db 'STAGE2.BIN not found!', ENDL, 0
+msg_read_failed:        db 'Read Err', ENDL, 0
+msg_params_failed:      db 'Param Err', ENDL, 0
+msg_stage2_not_found:   db 'No Stage2', ENDL, 0
 file_stage2_bin:        db 'STAGE2  BIN'
 stage2_cluster:         dw 0
 

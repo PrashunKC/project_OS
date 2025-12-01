@@ -1,11 +1,12 @@
+#include "graphics.h"
 #include "i8259.h"
 #include "idt.h"
 #include "isr.h"
 #include "keyboard.h"
+#include "multiboot.h"
+#include "paging.h"
 #include "shell.h"
 #include "stdint.h"
-
-#define _cdecl __attribute__((cdecl))
 
 // VGA text mode constants
 #define VGA_WIDTH 80
@@ -41,8 +42,30 @@ static volatile uint8_t *video_memory = (volatile uint8_t *)VGA_MEMORY;
 // Cursor accessors for shell
 int get_cursor_row(void) { return cursor_row; }
 int get_cursor_col(void) { return cursor_col; }
-void set_cursor_row(int row) { cursor_row = row; }
-void set_cursor_col(int col) { cursor_col = col; }
+
+// Helper for port I/O
+static inline void outb(uint16_t port, uint8_t val) {
+  __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
+}
+
+// Update hardware cursor position
+void update_cursor(void) {
+  uint16_t pos = cursor_row * VGA_WIDTH + cursor_col;
+  outb(0x3D4, 0x0F);
+  outb(0x3D5, (uint8_t)(pos & 0xFF));
+  outb(0x3D4, 0x0E);
+  outb(0x3D5, (uint8_t)((pos >> 8) & 0xFF));
+}
+
+void set_cursor_row(int row) {
+  cursor_row = row;
+  update_cursor();
+}
+
+void set_cursor_col(int col) {
+  cursor_col = col;
+  update_cursor();
+}
 
 // Scroll the screen content up by one line
 void scroll_screen(void) {
@@ -108,8 +131,8 @@ void kputc(char c, uint8_t color) {
     scroll_screen();
     cursor_row = VGA_HEIGHT - 1;
   }
-  extern void set_vga_cursor(int col, int row);
-  set_vga_cursor(cursor_col, cursor_row);
+  // Update hardware cursor
+  update_cursor();
 }
 
 // Print a string with specified color
@@ -138,22 +161,26 @@ void kprint_line(char c, int count, uint8_t color) {
   }
 }
 
-void _cdecl start(uint16_t bootDrive) {
-  // Color scheme for kernel messages
-  uint8_t title_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
-  uint8_t info_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
-  uint8_t ok_color = VGA_ENTRY_COLOR(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
-  uint8_t header_color = VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
-  uint8_t detail_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK);
+void start64(uint64_t magic, uint64_t mbi_addr) {
+  // Cast mbi_addr to pointer (we'll use it if needed)
+  multiboot_info_t *mbi = (multiboot_info_t *)(uintptr_t)mbi_addr;
+  (void)mbi; // Suppress unused warning for now
 
-  // Clear screen with black background
-  clear_screen(VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  // Verify Multiboot magic (lower 32 bits)
+  if ((uint32_t)magic != MULTIBOOT_BOOTLOADER_MAGIC) {
+    // Not booted by multiboot - continue anyway for custom bootloader
+    // The custom bootloader passes 0x2BADB002 in EDI
+  }
 
-  // Initialize ISRs
-  isr_init();
+  // Initialize graphics system first
+  graphics_init();
 
-  // Initialize IDT
+  // Initialize Multiboot (parse framebuffer info from GRUB)
+  multiboot_init((uint32_t)magic, mbi);
+
+  // Initialize IDT and ISRs
   idt_init();
+  isr_init();
 
   // Initialize PIC
   i8259_init();
@@ -163,6 +190,108 @@ void _cdecl start(uint16_t bootDrive) {
 
   // Initialize keyboard
   keyboard_init();
+
+  // Check if we're in graphics mode
+  if (graphics_is_available()) {
+    // Graphical boot screen!
+    FramebufferInfo *fb = graphics_get_info();
+    
+    // Clear screen with a nice gradient-like background
+    graphics_clear(COLOR_DESKTOP_BG);
+    
+    // Draw a centered window
+    int win_w = 500;
+    int win_h = 300;
+    int win_x = (fb->width - win_w) / 2;
+    int win_y = (fb->height - win_h) / 2;
+    
+    // Window shadow
+    graphics_fill_rect(win_x + 4, win_y + 4, win_w, win_h, COLOR_DARK_GRAY);
+    
+    // Window background
+    graphics_fill_rect(win_x, win_y, win_w, win_h, COLOR_WINDOW_BG);
+    
+    // Title bar
+    graphics_fill_rect(win_x, win_y, win_w, 24, COLOR_TITLE_BAR);
+    graphics_draw_string(win_x + 10, win_y + 4, "NBOS Kernel", COLOR_WHITE, COLOR_TITLE_BAR);
+    
+    // Window border
+    graphics_draw_rect(win_x, win_y, win_w, win_h, COLOR_BLACK);
+    
+    // Content
+    int content_y = win_y + 40;
+    int content_x = win_x + 20;
+    
+    graphics_draw_string(content_x, content_y, "Welcome to NBOS!", COLOR_BLACK, COLOR_WINDOW_BG);
+    content_y += 24;
+    
+    graphics_draw_string(content_x, content_y, "64-bit Long Mode Active", COLOR_DARK_GRAY, COLOR_WINDOW_BG);
+    content_y += 20;
+    
+    // Display resolution info
+    int w = fb->width;
+    int h = fb->height;
+    int b = fb->bpp;
+    
+    graphics_draw_string(content_x, content_y, "Resolution:", COLOR_BLACK, COLOR_WINDOW_BG);
+    content_y += 20;
+    
+    // Draw resolution numbers manually
+    char buf[32];
+    int pos = 0;
+    
+    // Width
+    if (w >= 1000) buf[pos++] = '0' + (w / 1000) % 10;
+    if (w >= 100) buf[pos++] = '0' + (w / 100) % 10;
+    if (w >= 10) buf[pos++] = '0' + (w / 10) % 10;
+    buf[pos++] = '0' + w % 10;
+    buf[pos++] = 'x';
+    
+    // Height
+    if (h >= 1000) buf[pos++] = '0' + (h / 1000) % 10;
+    if (h >= 100) buf[pos++] = '0' + (h / 100) % 10;
+    if (h >= 10) buf[pos++] = '0' + (h / 10) % 10;
+    buf[pos++] = '0' + h % 10;
+    buf[pos++] = 'x';
+    
+    // BPP
+    if (b >= 10) buf[pos++] = '0' + (b / 10) % 10;
+    buf[pos++] = '0' + b % 10;
+    buf[pos++] = '\0';
+    
+    graphics_draw_string(content_x + 20, content_y, buf, COLOR_BLUE, COLOR_WINDOW_BG);
+    content_y += 30;
+    
+    // Status
+    graphics_draw_string(content_x, content_y, "[OK] System initialized", COLOR_GREEN, COLOR_WINDOW_BG);
+    content_y += 20;
+    graphics_draw_string(content_x, content_y, "[OK] Interrupts enabled", COLOR_GREEN, COLOR_WINDOW_BG);
+    content_y += 20;
+    graphics_draw_string(content_x, content_y, "[OK] Keyboard ready", COLOR_GREEN, COLOR_WINDOW_BG);
+    content_y += 30;
+    
+    graphics_draw_string(content_x, content_y, "Press any key to continue...", COLOR_DARK_GRAY, COLOR_WINDOW_BG);
+    
+    // Wait for a keypress
+    // Simple busy wait for keyboard
+    while (!keyboard_has_key()) {
+      __asm__ volatile("hlt");
+    }
+    keyboard_get_key(); // Consume the key
+    
+    // Clear for shell (fallback to text mode for now)
+    // For a real graphical shell, we'd need a lot more code!
+  }
+
+  // Color scheme for kernel messages
+  uint8_t title_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLUE);
+  uint8_t info_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+  uint8_t ok_color = VGA_ENTRY_COLOR(VGA_COLOR_GREEN, VGA_COLOR_BLACK);
+  uint8_t header_color = VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+  uint8_t detail_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK);
+
+  // Clear screen with black background
+  clear_screen(VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
 
   // Print kernel header
   kprint_line('=', 50, header_color);
@@ -174,8 +303,7 @@ void _cdecl start(uint16_t bootDrive) {
   knewline();
 
   // Print system information
-  kprint("[INFO] Kernel loaded and running in 32-bit protected mode",
-         info_color);
+  kprint("[INFO] Kernel loaded and running in 64-bit Long Mode", info_color);
   knewline();
   kprint("[INFO] VGA text mode initialized (80x25)", info_color);
   knewline();
@@ -193,15 +321,15 @@ void _cdecl start(uint16_t bootDrive) {
   knewline();
   kprint("System Details:", header_color);
   knewline();
-  kprint("  - Architecture: x86 (i386)", detail_color);
+  kprint("  - Architecture: x86_64 (AMD64)", detail_color);
   knewline();
-  kprint("  - Mode: 32-bit Protected Mode", detail_color);
+  kprint("  - Mode: 64-bit Long Mode", detail_color);
   knewline();
   kprint("  - Kernel Address: 0x100000 (1MB)", detail_color);
   knewline();
   kprint("  - Version: 1.0.0", detail_color);
   knewline();
-  kprint("  - Build Date: 2025-11-30", detail_color);
+  kprint("  - Build Date: 2025-12-01", detail_color);
   knewline();
   kprint_line('-', 50, detail_color);
   knewline();
@@ -212,4 +340,8 @@ void _cdecl start(uint16_t bootDrive) {
 
   // Run shell (never returns)
   shell_run();
+
+  // Halt
+  for (;;)
+    __asm__("hlt");
 }

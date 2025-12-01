@@ -7,3 +7,6 @@ void shell_run(void);
 
 // Handle character input from keyboard
 void shell_putchar(char c);
+
+// Handle arrow keys
+void shell_handle_arrow(uint8_t scancode);
