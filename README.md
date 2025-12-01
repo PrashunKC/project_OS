@@ -5667,188 +5667,6 @@ Happy OS development! 🚀
 
 ---
 
-*Last updated: November 14, 2025*
-*Project phase: Two-stage bootloader with C integration (complete)*
-*Next milestone: Kernel loading and protected mode*
-- **Solution:** Ensure kernel.bin was copied correctly. Check with:
-  ```bash
-  mdir -i build/main_floppy.img ::/
-  ```
-
-**Issue:** Bootloader hangs or resets
-- **Solution:** Check boot signature (last 2 bytes must be 0xAA55)
-
-**Issue:** Want to test on real hardware
-- **Solution:**
-  ```bash
-  # CAUTION: This will erase the USB drive!
-  # Find USB device
-  lsblk
-  # Write image (replace /dev/sdX with your USB device)
-  sudo dd if=build/main_floppy.img of=/dev/sdX bs=512
-  sudo sync
-  # Boot from USB on real computer
-  ```
-- **Note:** Image is only 1.44 MB, rest of USB will be unused
-- **Warning:** Some modern BIOS might not boot from such small images
-
-**Issue:** Build is slow
-- **Current build time:** ~1-2 seconds on modern hardware
-- **If slower:** Check if antivirus is scanning build directory
-- **Optimization:** Build artifacts are minimal, so clean builds are fast
-
-### Limitations and Known Issues
-
-**Current Limitations:**
-
-1. **No Kernel Loading Yet** 
-   - Stage 2 displays message but doesn't load kernel
-   - Kernel loading code needs to be implemented in Stage 2 C code
-   - Currently just has `for(;;);` infinite loop after displaying message
-
-2. **64 KB Segment Limits**
-   - Stage 2 limited to ~29 KB before hitting Stage 1 at 0x7C00
-   - Future kernel would be limited to 64 KB per segment in real mode
-   - Solution: Transition to protected mode for larger programs
-
-3. **No Error Recovery in Stage 2**
-   - If Stage 2 encounters an error, it just halts
-   - No error messages implemented yet
-   - Stage 1 has error messages, but Stage 2 doesn't
-
-4. **No User Input**
-   - System doesn't handle keyboard input
-   - Only outputs to screen via BIOS INT 10h
-   - Keyboard interrupt handlers not implemented
-
-5. **Single-tasking Only**
-   - No multitasking support
-   - No process/thread management
-   - Runs in single execution context
-
-6. **Real Mode Limitations**
-   - Only 1 MB addressable memory (640 KB usable)
-   - No memory protection
-   - No virtual memory
-   - Direct hardware access (can corrupt system easily)
-
-7. **FAT12 Limitations**
-   - Read-only (can't write files)
-   - Maximum 2847 clusters on floppy
-   - Files up to ~1.4 MB maximum
-   - 8.3 filename format only
-
-**Known Issues/Quirks:**
-
-1. **Linker Warning About Stack**
-   - Warning: "stack segment not found"
-   - This is NORMAL and expected for raw binary output
-   - We manually set SS:SP in assembly, so no stack segment needed
-
-2. **Stage 2 Size Reporting**
-   - Linker may report different sizes depending on options
-   - Actual binary size is what matters (currently ~34 bytes)
-   - Future additions will increase size significantly
-
-3. **Boot Drive Number**
-   - DL register contains boot drive from BIOS
-   - Stage 1 passes this to Stage 2
-   - Stage 2 currently doesn't use it (but receives it as parameter)
-
-4. **Message Display**
-   - Message appears at current cursor position
-   - No cursor positioning implemented
-   - No screen clearing implemented
-   - Just uses BIOS teletype function (scrolls if needed)
-
-### Future Enhancement Ideas
-
-- Implement a proper 32-bit protected mode kernel
-- Add keyboard and mouse drivers
-- Implement a simple shell
-- Add support for loading and executing programs
-- Implement a memory manager
-- Add multitasking support
-- Create a simple GUI
-- Support additional filesystems (FAT16, FAT32)
-
----
-
-## Learning Resources
-
-This project follows common OS development tutorials and references:
-
-- **OSDev Wiki**: https://wiki.osdev.org/
-- **Intel x86 Documentation**: CPU instruction set and architecture manuals
-- **BIOS Interrupt Reference**: INT 10h (video), INT 13h (disk), INT 16h (keyboard)
-- **FAT Filesystem Specification**: Microsoft's FAT file system documentation
-
----
-
-## License
-
-See LICENSE file for details.
-
----
-
-## Acknowledgments
-
-This project was built by following various online tutorials and resources, with significant enhancements and comprehensive documentation. The journey from a basic bootloader to a sophisticated two-stage C-integrated bootloader demonstrates the evolution of understanding and skill development in OS programming.
-
-**Key learning milestones achieved:**
-1. ✅ Understanding BIOS boot process and 512-byte boot sector constraints
-2. ✅ Implementing FAT12 filesystem parsing from scratch
-3. ✅ Managing memory in real mode with segment addressing
-4. ✅ Integrating C code with assembly in a bare-metal environment
-5. ✅ Using Open Watcom compiler for 16-bit real mode development
-6. ✅ Creating modular build systems with Make
-7. ✅ Debugging low-level code with QEMU and GDB
-8. ✅ Understanding calling conventions and stack frames
-
-**Skills and experience gained:**
-- Low-level programming in x86 assembly (NASM syntax)
-- Bare-metal C programming without standard library
-- Filesystem implementation (FAT12 parsing and cluster following)
-- Hardware interfacing via BIOS interrupts
-- Two-stage bootloader architecture design
-- Build system design and cross-compilation
-- Binary file manipulation and linking
-- Debugging techniques for system software
-- Understanding memory models and segmentation
-
-**This project serves as an educational foundation for understanding:**
-- How computers boot from power-on to OS running
-- How operating systems interface with hardware
-- How filesystems organize and retrieve data on disk
-- How compilers, assemblers, and linkers work together
-- The interface layer between software and hardware
-- Memory management in constrained environments
-- Why modern OS features (virtual memory, protection) exist
-
-**Current achievement:**
-- ✅ Successfully boots in QEMU, VirtualBox, and VMware
-- ✅ Two-stage bootloader fully functional
-- ✅ FAT12 filesystem reading operational
-- ✅ C code executing in real mode
-- ✅ Screen output working via BIOS interrupts
-- ✅ Displays "Hello world from C!" message
-- ✅ Modular, maintainable codebase
-- ✅ Comprehensive documentation
-
-**What's been learned about real-world OS development:**
-- Why bootloaders are complex (size constraints, filesystem support)
-- Why two-stage bootloaders are necessary (512 bytes isn't enough)
-- Why real mode is limited (1 MB memory, no protection)
-- Why protected mode is essential (memory protection, virtual memory)
-- Why BIOS is slow (compatibility layer, mode switches on modern CPUs)
-- Why custom drivers are needed (BIOS only available in real mode)
-- Why OS development is challenging (debugging, no libraries, hardware quirks)
-
-**Ready for next phase:** 
-Kernel loading implementation and protected mode transition. The foundation is solid and the path forward is clear.
-
----
-
 ## Design Philosophy and Lessons Learned
 
 ### Why These Design Choices Matter
@@ -6135,7 +5953,7 @@ Happy OS development! 🚀
 
 ---
 
-*Last updated: November 30, 2025*  
+*Last updated: December 2025*  
 *Project phase: Two-stage bootloader with C integration (✅ Complete)*  
 *Enhanced documentation: Comprehensive theory, implementation, and alternatives*  
 *README enhancements: +2000 lines of detailed explanations, diagrams, and design rationale*  
@@ -6144,6 +5962,13 @@ Happy OS development! 🚀
 *Current binary size: Stage 1: 512 bytes | Stage 2: ~2KB | Kernel: ~2 KB*
 
 ## Changelog
+
+### Version 1.0.1 (2025-12-01)
+- **Fixed**: Removed duplicate sections in README (Learning Resources, License, Acknowledgments)
+- **Fixed**: Removed corrupted content mixed into documentation footer
+- **Fixed**: Removed hardcoded path in build.sh script
+- **Updated**: README last updated date to December 2025
+- **Improved**: Overall README structure and consistency
 
 ### Version 1.0.0 (2025-11-30)
 - **Added**: Enhanced logging system with log levels (INFO, OK, ERROR, DEBUG)
