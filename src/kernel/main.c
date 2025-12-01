@@ -1,12 +1,26 @@
+#include "console.h"
+#include "device.h"
+#include "elf.h"
 #include "graphics.h"
+#include "heap.h"
 #include "i8259.h"
 #include "idt.h"
 #include "isr.h"
 #include "keyboard.h"
+#include "module.h"
 #include "multiboot.h"
 #include "paging.h"
 #include "shell.h"
 #include "stdint.h"
+#include "syscall.h"
+#include "vfs.h"
+
+// Global flag for graphics mode
+static int using_graphics_console = 0;
+
+int is_graphics_mode(void) {
+    return using_graphics_console;
+}
 
 // VGA text mode constants
 #define VGA_WIDTH 80
@@ -182,6 +196,24 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
   idt_init();
   isr_init();
 
+  // Initialize heap memory allocator
+  heap_init();
+
+  // Initialize syscall subsystem
+  syscall_init();
+
+  // Initialize Virtual File System
+  vfs_init();
+
+  // Initialize device manager
+  device_init();
+
+  // Initialize devfs (/dev filesystem)
+  devfs_init();
+
+  // Initialize module loader
+  module_init_system();
+
   // Initialize PIC
   i8259_init();
 
@@ -279,9 +311,67 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
     }
     keyboard_get_key(); // Consume the key
     
-    // Clear for shell (fallback to text mode for now)
-    // For a real graphical shell, we'd need a lot more code!
+    // Switch to graphical console mode
+    using_graphics_console = 1;
+    console_init();
   }
+
+  // Check if we're using graphics console
+  if (using_graphics_console) {
+    // Print kernel header in graphics mode
+    console_print("==================================================\n", CONSOLE_COLOR_YELLOW);
+    console_print("          KERNEL STARTED SUCCESSFULLY\n", CONSOLE_COLOR_WHITE);
+    console_print("==================================================\n", CONSOLE_COLOR_YELLOW);
+    console_newline();
+    
+    console_print("[INFO] Kernel loaded and running in 64-bit Long Mode\n", CONSOLE_COLOR_LIGHT_GREEN);
+    console_print("[INFO] Graphics console initialized\n", CONSOLE_COLOR_LIGHT_GREEN);
+    
+    FramebufferInfo *fb = graphics_get_info();
+    console_print("[INFO] Resolution: ", CONSOLE_COLOR_LIGHT_GREEN);
+    
+    // Print resolution
+    char buf[32];
+    int pos = 0;
+    int w = fb->width;
+    int h = fb->height;
+    int b = fb->bpp;
+    
+    if (w >= 1000) buf[pos++] = '0' + (w / 1000) % 10;
+    if (w >= 100) buf[pos++] = '0' + (w / 100) % 10;
+    if (w >= 10) buf[pos++] = '0' + (w / 10) % 10;
+    buf[pos++] = '0' + w % 10;
+    buf[pos++] = 'x';
+    if (h >= 1000) buf[pos++] = '0' + (h / 1000) % 10;
+    if (h >= 100) buf[pos++] = '0' + (h / 100) % 10;
+    if (h >= 10) buf[pos++] = '0' + (h / 10) % 10;
+    buf[pos++] = '0' + h % 10;
+    buf[pos++] = 'x';
+    if (b >= 10) buf[pos++] = '0' + (b / 10) % 10;
+    buf[pos++] = '0' + b % 10;
+    buf[pos++] = '\n';
+    buf[pos] = '\0';
+    console_print(buf, CONSOLE_COLOR_WHITE);
+    
+    console_newline();
+    console_print("[OK] System initialization complete\n", CONSOLE_COLOR_GREEN);
+    console_newline();
+    
+    console_print("--------------------------------------------------\n", CONSOLE_COLOR_GRAY);
+    console_print("System Details:\n", CONSOLE_COLOR_YELLOW);
+    console_print("  - Architecture: x86_64 (AMD64)\n", CONSOLE_COLOR_GRAY);
+    console_print("  - Mode: 64-bit Long Mode\n", CONSOLE_COLOR_GRAY);
+    console_print("  - Kernel Address: 0x100000 (1MB)\n", CONSOLE_COLOR_GRAY);
+    console_print("  - Version: 1.0.0\n", CONSOLE_COLOR_GRAY);
+    console_print("--------------------------------------------------\n", CONSOLE_COLOR_GRAY);
+    console_newline();
+    
+    // Initialize and run shell
+    shell_init();
+    shell_run();
+  }
+  
+  // Fallback to VGA text mode (shouldn't reach here if graphics is available)
 
   // Color scheme for kernel messages
   uint8_t title_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLUE);

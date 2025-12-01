@@ -1,8 +1,11 @@
 #include "shell.h"
 #include "paging.h"
 #include "stdint.h"
+#include "console.h"
+#include "heap.h"
+#include "syscall.h"
 
-// External functions from main.c
+// External functions from main.c (for VGA fallback)
 extern void kputc(char c, uint8_t color);
 extern void kprint(const char *str, uint8_t color);
 extern void knewline(void);
@@ -11,6 +14,9 @@ extern int get_cursor_col(void);
 extern int get_cursor_row(void);
 extern void set_cursor_col(int col);
 extern void set_cursor_row(int row);
+
+// Check if we're in graphics mode
+extern int is_graphics_mode(void);
 
 // Helper for port I/O
 static inline uint8_t inb(uint16_t port) {
@@ -41,6 +47,83 @@ static int strlen(const char *str) {
   return len;
 }
 
+// Wrapper functions for output (use graphics console if available)
+static void shell_print(const char *str, uint32_t color) {
+  if (is_graphics_mode()) {
+    console_print(str, color);
+  } else {
+    // Map 32-bit color to VGA color (simplified)
+    uint8_t vga_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    if (color == CONSOLE_COLOR_GREEN || color == CONSOLE_COLOR_LIGHT_GREEN) {
+      vga_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK);
+    } else if (color == CONSOLE_COLOR_YELLOW || color == CONSOLE_COLOR_ORANGE) {
+      vga_color = VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
+    } else if (color == CONSOLE_COLOR_RED || color == CONSOLE_COLOR_LIGHT_RED) {
+      vga_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK);
+    } else if (color == CONSOLE_COLOR_GRAY || color == CONSOLE_COLOR_LIGHT_GRAY || color == CONSOLE_COLOR_DARK_GRAY) {
+      vga_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK);
+    }
+    kprint(str, vga_color);
+  }
+}
+
+static void shell_putc(char c, uint32_t color) {
+  if (is_graphics_mode()) {
+    console_putchar(c, color);
+  } else {
+    uint8_t vga_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
+    kputc(c, vga_color);
+  }
+}
+
+static void shell_newline(void) {
+  if (is_graphics_mode()) {
+    console_newline();
+  } else {
+    knewline();
+  }
+}
+
+static void shell_clear(void) {
+  if (is_graphics_mode()) {
+    console_clear(CONSOLE_COLOR_BLACK);
+  } else {
+    clear_screen(VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  }
+}
+
+static int shell_get_col(void) {
+  if (is_graphics_mode()) {
+    return console_get_col();
+  } else {
+    return get_cursor_col();
+  }
+}
+
+static int shell_get_row(void) {
+  if (is_graphics_mode()) {
+    return console_get_row();
+  } else {
+    return get_cursor_row();
+  }
+}
+
+static void shell_set_col(int col) {
+  if (is_graphics_mode()) {
+    console_set_col(col);
+  } else {
+    set_cursor_col(col);
+  }
+}
+
+static void shell_set_row(int row) {
+  if (is_graphics_mode()) {
+    console_set_row(row);
+  } else {
+    set_cursor_row(row);
+  }
+}
+
 static int strcmp(const char *s1, const char *s2) {
   while (*s1 && (*s1 == *s2)) {
     s1++;
@@ -62,54 +145,38 @@ static int strncmp(const char *s1, const char *s2, int n) {
 
 // Display prompt
 static void show_prompt(void) {
-  kprint("$ ", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
+  shell_print("$ ", CONSOLE_COLOR_LIGHT_GREEN);
 }
 
 // Built-in command: help
 static void cmd_help(void) {
-  knewline();
-  kprint("Available commands:",
-         VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  help   - Show this help message",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  clear  - Clear the screen",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  echo   - Print text to screen",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  peek   - Inspect memory (peek <addr>)",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  reboot - Reboot the system",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  shutdown - Power off the system",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  halt   - Halt the system",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  about  - Show OS information",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  info   - Show system register info",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
+  shell_newline();
+  shell_print("Available commands:\n", CONSOLE_COLOR_YELLOW);
+  shell_print("  help   - Show this help message\n", CONSOLE_COLOR_WHITE);
+  shell_print("  clear  - Clear the screen\n", CONSOLE_COLOR_WHITE);
+  shell_print("  echo   - Print text to screen\n", CONSOLE_COLOR_WHITE);
+  shell_print("  peek   - Inspect memory (peek <addr>)\n", CONSOLE_COLOR_WHITE);
+  shell_print("  mem    - Show memory statistics\n", CONSOLE_COLOR_WHITE);
+  shell_print("  alloc  - Test allocation (alloc <size>)\n", CONSOLE_COLOR_WHITE);
+  shell_print("  linux  - Linux syscall compat layer\n", CONSOLE_COLOR_WHITE);
+  shell_print("  reboot - Reboot the system\n", CONSOLE_COLOR_WHITE);
+  shell_print("  shutdown - Power off the system\n", CONSOLE_COLOR_WHITE);
+  shell_print("  halt   - Halt the system\n", CONSOLE_COLOR_WHITE);
+  shell_print("  about  - Show OS information\n", CONSOLE_COLOR_WHITE);
+  shell_print("  info   - Show system register info\n", CONSOLE_COLOR_WHITE);
+  shell_print("  syscall - Test syscall interface\n", CONSOLE_COLOR_WHITE);
 }
 
 // Built-in command: clear
 static void cmd_clear(void) {
-  clear_screen(VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  shell_clear();
 }
 
 // Built-in command: echo
 static void cmd_echo(const char *args) {
-  knewline();
-  kprint(args, VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
+  shell_newline();
+  shell_print(args, CONSOLE_COLOR_WHITE);
+  shell_newline();
 }
 
 // Helper for port I/O
@@ -140,15 +207,14 @@ static uint64_t atoi_hex(const char *s) {
 // Helper to print hex byte
 static void print_hex_byte(uint8_t byte) {
   char hex[] = "0123456789ABCDEF";
-  kputc(hex[(byte >> 4) & 0xF],
-        VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  kputc(hex[byte & 0xF], VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+  shell_putc(hex[(byte >> 4) & 0xF], CONSOLE_COLOR_WHITE);
+  shell_putc(hex[byte & 0xF], CONSOLE_COLOR_WHITE);
 }
 
 // Built-in command: reboot
 static void cmd_reboot(void) {
-  knewline();
-  kprint("Rebooting...", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+  shell_newline();
+  shell_print("Rebooting...", CONSOLE_COLOR_LIGHT_RED);
 
   // Pulse the CPU reset line using the keyboard controller
   uint8_t good = 0x02;
@@ -167,9 +233,8 @@ static void cmd_reboot(void) {
 
 // Built-in command: shutdown
 static void cmd_shutdown(void) {
-  knewline();
-  kprint("Shutting down...",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+  shell_newline();
+  shell_print("Shutting down...", CONSOLE_COLOR_LIGHT_RED);
 
   // QEMU Shutdown (older versions)
   outw(0xB004, 0x2000);
@@ -185,12 +250,9 @@ static void cmd_shutdown(void) {
   // complex in C without string loop)
 
   // If we are still here, it failed
-  knewline();
-  kprint("Shutdown failed (ACPI not implemented).",
-         VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-  knewline();
-  kprint("System Halted.",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+  shell_newline();
+  shell_print("Shutdown failed (ACPI not implemented).\n", CONSOLE_COLOR_YELLOW);
+  shell_print("System Halted.", CONSOLE_COLOR_LIGHT_RED);
 
   // Disable interrupts and halt
   __asm__ volatile("cli");
@@ -201,11 +263,9 @@ static void cmd_shutdown(void) {
 
 // Built-in command: halt
 static void cmd_halt(void) {
-  knewline();
-  kprint("System Halted.",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
-  kprint(" Press Reset to restart.",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  shell_newline();
+  shell_print("System Halted.", CONSOLE_COLOR_LIGHT_RED);
+  shell_print(" Press Reset to restart.", CONSOLE_COLOR_GRAY);
 
   // Disable interrupts and halt
   __asm__ volatile("cli");
@@ -217,90 +277,323 @@ static void cmd_halt(void) {
 // Built-in command: peek
 static void cmd_peek(const char *args) {
   if (!*args) {
-    knewline();
-    kprint("Usage: peek <address>",
-           VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-    knewline();
+    shell_newline();
+    shell_print("Usage: peek <address>\n", CONSOLE_COLOR_YELLOW);
     return;
   }
 
   uint64_t addr = atoi_hex(args);
   uint8_t *ptr = (uint8_t *)(uintptr_t)addr;
 
-  knewline();
-  kprint("Memory at 0x",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  kprint(args, VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  kprint(": ", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  shell_newline();
+  shell_print("Memory at 0x", CONSOLE_COLOR_GRAY);
+  shell_print(args, CONSOLE_COLOR_WHITE);
+  shell_print(": ", CONSOLE_COLOR_GRAY);
 
   // Print 16 bytes
   for (int i = 0; i < 16; i++) {
     print_hex_byte(ptr[i]);
-    kputc(' ', VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+    shell_putc(' ', CONSOLE_COLOR_GRAY);
   }
-  knewline();
+  shell_newline();
 }
 
 // Built-in command: about
 static void cmd_about(void) {
-  knewline();
-  kprint("project_OS - A Custom Operating System",
-         VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-  knewline();
-  kprint("Version: 1.0.0", VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("Features:", VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  - 32-bit Protected Mode",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  - Interrupt Handling (IDT)",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  - PS/2 Keyboard Driver",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
-  kprint("  - Interactive Shell",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
+  shell_newline();
+  shell_print("project_OS - A Custom Operating System\n", CONSOLE_COLOR_YELLOW);
+  shell_print("Version: 1.0.0\n", CONSOLE_COLOR_WHITE);
+  shell_print("Features:\n", CONSOLE_COLOR_WHITE);
+  shell_print("  - 64-bit Long Mode\n", CONSOLE_COLOR_GRAY);
+  shell_print("  - VESA Graphics Console\n", CONSOLE_COLOR_GRAY);
+  shell_print("  - Interrupt Handling (IDT)\n", CONSOLE_COLOR_GRAY);
+  shell_print("  - PS/2 Keyboard Driver\n", CONSOLE_COLOR_GRAY);
+  shell_print("  - Interactive Shell\n", CONSOLE_COLOR_GRAY);
+  shell_print("  - Syscall Interface\n", CONSOLE_COLOR_GRAY);
 }
 
 // Helper to print 32-bit hex value
 static void print_hex32(uint32_t val) {
   char hex[] = "0123456789ABCDEF";
-  kprint("0x", VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+  shell_print("0x", CONSOLE_COLOR_WHITE);
   for (int i = 28; i >= 0; i -= 4) {
-    kputc(hex[(val >> i) & 0xF],
-          VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+    shell_putc(hex[(val >> i) & 0xF], CONSOLE_COLOR_WHITE);
   }
 }
 
 // Built-in command: info
 static void cmd_info(void) {
-  knewline();
-  kprint("System Information:",
-         VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-  knewline();
+  shell_newline();
+  shell_print("System Information:\n", CONSOLE_COLOR_YELLOW);
 
-  kprint("  CR0: ", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  shell_print("  CR0: ", CONSOLE_COLOR_GRAY);
   print_hex32(get_cr0());
-  kprint("  (PG=", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  kprint((get_cr0() & 0x80000000) ? "1" : "0",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  kprint(")", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
+  shell_print("  (PG=", CONSOLE_COLOR_GRAY);
+  shell_print((get_cr0() & 0x80000000) ? "1" : "0", CONSOLE_COLOR_WHITE);
+  shell_print(")\n", CONSOLE_COLOR_GRAY);
 
-  kprint("  CR3: ", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  shell_print("  CR3: ", CONSOLE_COLOR_GRAY);
   print_hex32(get_cr3());
-  knewline();
+  shell_newline();
 
-  kprint("  CR4: ", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
+  shell_print("  CR4: ", CONSOLE_COLOR_GRAY);
   print_hex32(get_cr4());
-  kprint("  (PAE=", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  kprint((get_cr4() & 0x20) ? "1" : "0",
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-  kprint(")", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
+  shell_print("  (PAE=", CONSOLE_COLOR_GRAY);
+  shell_print((get_cr4() & 0x20) ? "1" : "0", CONSOLE_COLOR_WHITE);
+  shell_print(")\n", CONSOLE_COLOR_GRAY);
+}
+
+// Test syscall interface
+static void cmd_syscall(void) {
+  shell_newline();
+  shell_print("Testing syscall interface (INT 0x80)...\n\n", CONSOLE_COLOR_YELLOW);
+  
+  // Test SYS_GETPID (7) - should return 1
+  uint64_t pid;
+  __asm__ volatile(
+    "movq $7, %%rax\n"   // SYS_GETPID
+    "int $0x80\n"
+    : "=a"(pid)
+    :
+    : "memory"
+  );
+  
+  shell_print("SYS_GETPID result: ", CONSOLE_COLOR_GRAY);
+  char buf[16];
+  buf[0] = '0' + (pid % 10);
+  buf[1] = '\0';
+  shell_print(buf, CONSOLE_COLOR_LIGHT_GREEN);
+  shell_print(" (expected: 1)\n", CONSOLE_COLOR_GRAY);
+  
+  // Test SYS_GETWIDTH (13)
+  uint64_t width;
+  __asm__ volatile(
+    "movq $13, %%rax\n"  // SYS_GETWIDTH
+    "int $0x80\n"
+    : "=a"(width)
+    :
+    : "memory"
+  );
+  
+  shell_print("SYS_GETWIDTH result: ", CONSOLE_COLOR_GRAY);
+  // Simple number to string
+  int i = 0;
+  uint64_t n = width;
+  if (n == 0) {
+    buf[i++] = '0';
+  } else {
+    while (n > 0) {
+      buf[i++] = '0' + (n % 10);
+      n /= 10;
+    }
+  }
+  buf[i] = '\0';
+  // Reverse
+  for (int j = 0; j < i / 2; j++) {
+    char t = buf[j];
+    buf[j] = buf[i - 1 - j];
+    buf[i - 1 - j] = t;
+  }
+  shell_print(buf, CONSOLE_COLOR_LIGHT_GREEN);
+  shell_newline();
+  
+  // Test SYS_GETHEIGHT (14)
+  uint64_t height;
+  __asm__ volatile(
+    "movq $14, %%rax\n"  // SYS_GETHEIGHT
+    "int $0x80\n"
+    : "=a"(height)
+    :
+    : "memory"
+  );
+  
+  shell_print("SYS_GETHEIGHT result: ", CONSOLE_COLOR_GRAY);
+  i = 0;
+  n = height;
+  if (n == 0) {
+    buf[i++] = '0';
+  } else {
+    while (n > 0) {
+      buf[i++] = '0' + (n % 10);
+      n /= 10;
+    }
+  }
+  buf[i] = '\0';
+  for (int j = 0; j < i / 2; j++) {
+    char t = buf[j];
+    buf[j] = buf[i - 1 - j];
+    buf[i - 1 - j] = t;
+  }
+  shell_print(buf, CONSOLE_COLOR_LIGHT_GREEN);
+  shell_newline();
+  
+  shell_print("\nSyscall test complete!\n", CONSOLE_COLOR_LIGHT_GREEN);
+}
+
+// Helper to print number
+static void print_number(uint64_t n, uint32_t color) {
+  char buf[32];
+  int pos = 0;
+  
+  if (n == 0) {
+    buf[pos++] = '0';
+  } else {
+    int digits[20];
+    int count = 0;
+    while (n > 0) {
+      digits[count++] = n % 10;
+      n /= 10;
+    }
+    for (int i = count - 1; i >= 0; i--) {
+      buf[pos++] = '0' + digits[i];
+    }
+  }
+  buf[pos] = '\0';
+  shell_print(buf, color);
+}
+
+// Built-in command: mem - show memory statistics
+static void cmd_mem(void) {
+  shell_newline();
+  shell_print("Memory Statistics:\n", CONSOLE_COLOR_YELLOW);
+  
+  HeapStats stats;
+  heap_get_stats(&stats);
+  
+  shell_print("  Total heap:    ", CONSOLE_COLOR_GRAY);
+  print_number(stats.total_size / 1024, CONSOLE_COLOR_WHITE);
+  shell_print(" KB (", CONSOLE_COLOR_GRAY);
+  print_number(stats.total_size / (1024 * 1024), CONSOLE_COLOR_WHITE);
+  shell_print(" MB)\n", CONSOLE_COLOR_GRAY);
+  
+  shell_print("  Used:          ", CONSOLE_COLOR_GRAY);
+  print_number(stats.used_size, CONSOLE_COLOR_LIGHT_RED);
+  shell_print(" bytes\n", CONSOLE_COLOR_GRAY);
+  
+  shell_print("  Free:          ", CONSOLE_COLOR_GRAY);
+  print_number(stats.free_size / 1024, CONSOLE_COLOR_LIGHT_GREEN);
+  shell_print(" KB\n", CONSOLE_COLOR_GRAY);
+  
+  shell_print("  Allocations:   ", CONSOLE_COLOR_GRAY);
+  print_number(stats.num_allocations, CONSOLE_COLOR_WHITE);
+  shell_newline();
+  
+  shell_print("  Free blocks:   ", CONSOLE_COLOR_GRAY);
+  print_number(stats.num_free_blocks, CONSOLE_COLOR_WHITE);
+  shell_newline();
+  
+  shell_print("  Largest free:  ", CONSOLE_COLOR_GRAY);
+  print_number(stats.largest_free / 1024, CONSOLE_COLOR_LIGHT_GREEN);
+  shell_print(" KB\n", CONSOLE_COLOR_GRAY);
+}
+
+// Helper to parse decimal number
+static uint64_t parse_number(const char *s) {
+  uint64_t res = 0;
+  while (*s >= '0' && *s <= '9') {
+    res = res * 10 + (*s - '0');
+    s++;
+  }
+  return res;
+}
+
+// Built-in command: alloc - test memory allocation
+static void cmd_alloc(const char *args) {
+  shell_newline();
+  
+  if (!*args) {
+    shell_print("Usage: alloc <size>\n", CONSOLE_COLOR_YELLOW);
+    shell_print("  Allocates <size> bytes and shows result.\n", CONSOLE_COLOR_GRAY);
+    shell_print("  Use 'mem' to see current allocations.\n", CONSOLE_COLOR_GRAY);
+    return;
+  }
+  
+  uint64_t size = parse_number(args);
+  if (size == 0) {
+    shell_print("Invalid size\n", CONSOLE_COLOR_LIGHT_RED);
+    return;
+  }
+  
+  void *ptr = kmalloc(size);
+  
+  if (ptr == NULL) {
+    shell_print("Allocation failed! Out of memory.\n", CONSOLE_COLOR_LIGHT_RED);
+  } else {
+    shell_print("Allocated ", CONSOLE_COLOR_LIGHT_GREEN);
+    print_number(size, CONSOLE_COLOR_WHITE);
+    shell_print(" bytes at 0x", CONSOLE_COLOR_LIGHT_GREEN);
+    
+    // Print address as hex
+    char hex[] = "0123456789ABCDEF";
+    uint64_t addr = (uint64_t)ptr;
+    char buf[17];
+    for (int i = 15; i >= 0; i--) {
+      buf[i] = hex[addr & 0xF];
+      addr >>= 4;
+    }
+    buf[16] = '\0';
+    // Skip leading zeros
+    char *p = buf;
+    while (*p == '0' && *(p+1) != '\0') p++;
+    shell_print(p, CONSOLE_COLOR_WHITE);
+    shell_newline();
+    
+    // Fill with pattern to verify it works
+    uint8_t *bytes = (uint8_t *)ptr;
+    for (uint64_t i = 0; i < size; i++) {
+      bytes[i] = (uint8_t)(i & 0xFF);
+    }
+    shell_print("Memory filled with pattern.\n", CONSOLE_COLOR_GRAY);
+  }
+}
+
+// Built-in command: linux - show Linux syscall compatibility info
+static void cmd_linux(const char *args) {
+  shell_newline();
+  
+  if (*args && strcmp(args, "on") == 0) {
+    syscall_set_linux_mode(1);
+    shell_print("Linux compatibility mode ", CONSOLE_COLOR_WHITE);
+    shell_print("ENABLED\n", CONSOLE_COLOR_LIGHT_GREEN);
+    shell_print("Syscalls will be interpreted as Linux x86_64 syscalls.\n", CONSOLE_COLOR_GRAY);
+    return;
+  }
+  
+  if (*args && strcmp(args, "off") == 0) {
+    syscall_set_linux_mode(0);
+    shell_print("Linux compatibility mode ", CONSOLE_COLOR_WHITE);
+    shell_print("DISABLED\n", CONSOLE_COLOR_YELLOW);
+    shell_print("Syscalls will be interpreted as NBOS native syscalls.\n", CONSOLE_COLOR_GRAY);
+    return;
+  }
+  
+  // Show current status and info
+  shell_print("=== Linux Compatibility Layer ===\n", CONSOLE_COLOR_CYAN);
+  shell_newline();
+  
+  shell_print("Status: ", CONSOLE_COLOR_WHITE);
+  if (syscall_get_linux_mode()) {
+    shell_print("ENABLED\n", CONSOLE_COLOR_LIGHT_GREEN);
+  } else {
+    shell_print("DISABLED\n", CONSOLE_COLOR_YELLOW);
+  }
+  shell_newline();
+  
+  shell_print("Implemented Linux Syscalls:\n", CONSOLE_COLOR_WHITE);
+  shell_print("  read (0)      - Read from stdin\n", CONSOLE_COLOR_GRAY);
+  shell_print("  write (1)     - Write to stdout/stderr\n", CONSOLE_COLOR_GRAY);
+  shell_print("  brk (12)      - Expand heap (sbrk)\n", CONSOLE_COLOR_GRAY);
+  shell_print("  mmap (9)      - Memory mapping (anonymous only)\n", CONSOLE_COLOR_GRAY);
+  shell_print("  munmap (11)   - Unmap memory\n", CONSOLE_COLOR_GRAY);
+  shell_print("  exit (60)     - Exit program\n", CONSOLE_COLOR_GRAY);
+  shell_print("  getpid (39)   - Get process ID\n", CONSOLE_COLOR_GRAY);
+  shell_print("  getuid (102)  - Get user ID\n", CONSOLE_COLOR_GRAY);
+  shell_print("  getgid (104)  - Get group ID\n", CONSOLE_COLOR_GRAY);
+  shell_newline();
+  
+  shell_print("Usage:\n", CONSOLE_COLOR_WHITE);
+  shell_print("  linux on      - Enable Linux mode\n", CONSOLE_COLOR_GRAY);
+  shell_print("  linux off     - Disable Linux mode\n", CONSOLE_COLOR_GRAY);
 }
 
 // Execute command
@@ -318,7 +611,7 @@ static void execute_command(void) {
 
   // Skip empty commands
   if (len == 0) {
-    knewline();
+    shell_newline();
     show_prompt();
     return;
   }
@@ -354,17 +647,22 @@ static void execute_command(void) {
     cmd_peek(args);
   } else if (strcmp(cmd, "about") == 0) {
     cmd_about();
-  } else if (strcmp(cmd, "info") == 0) { // Added info command dispatch
+  } else if (strcmp(cmd, "info") == 0) {
     cmd_info();
+  } else if (strcmp(cmd, "syscall") == 0) {
+    cmd_syscall();
+  } else if (strcmp(cmd, "mem") == 0) {
+    cmd_mem();
+  } else if (strcmp(cmd, "alloc") == 0) {
+    cmd_alloc(args);
+  } else if (strcmp(cmd, "linux") == 0) {
+    cmd_linux(args);
   } else {
-    knewline();
-    kprint("Unknown command: ",
-           VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK));
-    kprint(cmd, VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
-    knewline();
-    kprint("Type 'help' for available commands",
-           VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-    knewline();
+    shell_newline();
+    shell_print("Unknown command: ", CONSOLE_COLOR_YELLOW);
+    shell_print(cmd, CONSOLE_COLOR_WHITE);
+    shell_newline();
+    shell_print("Type 'help' for available commands\n", CONSOLE_COLOR_GRAY);
   }
 
   // Reset input buffer
@@ -375,19 +673,18 @@ static void execute_command(void) {
 
 // Helper to redraw line from current position
 static void redraw_line(void) {
-  int start_col = get_cursor_col();
-  int start_row = get_cursor_row();
+  int start_col = shell_get_col();
+  int start_row = shell_get_row();
 
   // Print remaining part of buffer
-  kprint(&input_buffer[input_pos],
-         VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+  shell_print(&input_buffer[input_pos], CONSOLE_COLOR_WHITE);
 
   // Clear extra character at the end (if we deleted)
-  kputc(' ', VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+  shell_putc(' ', CONSOLE_COLOR_WHITE);
 
   // Restore cursor
-  set_cursor_row(start_row);
-  set_cursor_col(start_col);
+  shell_set_row(start_row);
+  shell_set_col(start_col);
 }
 
 // Handle character input
@@ -412,9 +709,9 @@ void shell_putchar(char c) {
       input_pos--;
 
       // Move cursor back
-      int col = get_cursor_col();
+      int col = shell_get_col();
       if (col > 2)
-        set_cursor_col(col - 1);
+        shell_set_col(col - 1);
 
       // Redraw line
       redraw_line();
@@ -433,7 +730,7 @@ void shell_putchar(char c) {
       input_buffer[input_pos] = c;
 
       // Print character
-      kputc(c, VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK));
+      shell_putc(c, CONSOLE_COLOR_WHITE);
       input_pos++;
 
       // Redraw rest of line if we inserted in middle
@@ -450,9 +747,9 @@ void shell_handle_arrow(uint8_t scancode) {
     // Move cursor left visually and update input_pos (insertion point)
     if (input_pos > 0) {
       input_pos--;
-      int col = get_cursor_col();
+      int col = shell_get_col();
       if (col > 2) { // Ensure we don't move past the prompt "$ "
-        set_cursor_col(col - 1);
+        shell_set_col(col - 1);
       }
     }
   } else if (scancode == 0x4D) { // Right Arrow
@@ -460,7 +757,7 @@ void shell_handle_arrow(uint8_t scancode) {
     // Only move right if we are not at the end of the current input string
     if (input_pos < strlen(input_buffer)) {
       input_pos++;
-      set_cursor_col(get_cursor_col() + 1);
+      shell_set_col(shell_get_col() + 1);
     }
   }
 }
@@ -470,14 +767,9 @@ void shell_init(void) { input_pos = 0; }
 
 // Run shell
 void shell_run(void) {
-  knewline();
-  kprint("Welcome to project_OS Shell!",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GREEN, VGA_COLOR_BLACK));
-  knewline();
-  kprint("Type 'help' for available commands.",
-         VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
-  knewline();
-  knewline();
+  shell_newline();
+  shell_print("Welcome to project_OS Shell!\n", CONSOLE_COLOR_LIGHT_GREEN);
+  shell_print("Type 'help' for available commands.\n\n", CONSOLE_COLOR_GRAY);
 
   show_prompt();
 
