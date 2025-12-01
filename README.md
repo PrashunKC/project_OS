@@ -5796,9 +5796,9 @@ void i8259_init() {
 
 **Why remap?**
 - Default PIC maps IRQ 0-7 to INT 0x08-0x0F
-- Intel reserved INT 0x00-0x1F for CPU exceptions
-- Conflict: IRQ 0 (timer) would clash with #DF (Double Fault)
-- Solution: Remap to 0x20+ to avoid conflicts
+- Intel reserved INT 0x00-0x1F for CPU exceptions (e.g., #DF Double Fault = 0x08, #GP General Protection = 0x0D)
+- Conflict: Hardware IRQs would clash with CPU exception handlers
+- Solution: Remap PIC to start at 0x20 (avoiding reserved exception range)
 
 ### Keyboard Driver Implementation
 
@@ -5844,7 +5844,9 @@ void keyboard_handler(Registers *regs) {
 
 // Register handler during init
 void keyboard_init(void) {
-    register_interrupt_handler(33, keyboard_handler);  // IRQ 1 → INT 0x21
+    // After PIC remapping: IRQ 0-7 → INT 0x20-0x27 (32-39 decimal)
+    // Keyboard is IRQ 1, so it maps to INT 0x21 = 33 decimal
+    register_interrupt_handler(33, keyboard_handler);
 }
 ```
 
