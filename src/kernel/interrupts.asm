@@ -7,6 +7,9 @@ extern idt_ptr
 extern isr_handler
 extern irq_handler
 
+; Defined in syscall.c
+extern syscall_handler
+
 global idt_load
 global isr0
 global isr1
@@ -57,6 +60,9 @@ global irq12
 global irq13
 global irq14
 global irq15
+
+; Syscall interrupt
+global isr128
 
 ; Load the IDT
 idt_load:
@@ -241,3 +247,66 @@ IRQ 12, 44
 IRQ 13, 45
 IRQ 14, 46
 IRQ 15, 47
+
+; ============================================================================
+; Syscall interrupt (INT 0x80)
+; ============================================================================
+
+; Syscall stub - similar to ISR but calls syscall_handler
+syscall_common_stub:
+    ; Save all general purpose registers
+    push rax
+    push rbx
+    push rcx
+    push rdx
+    push rsi
+    push rdi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    ; Pass pointer to stack frame as first argument (RDI in System V ABI)
+    mov rdi, rsp
+    
+    ; Align stack to 16 bytes (required by System V ABI)
+    mov rbp, rsp
+    and rsp, ~0xF
+    
+    call syscall_handler
+    
+    ; Restore stack
+    mov rsp, rbp
+
+    ; Restore all registers (RAX contains return value, restored from stack frame)
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rdi
+    pop rsi
+    pop rdx
+    pop rcx
+    pop rbx
+    pop rax     ; Return value is in RAX (set by syscall_handler in the stack frame)
+
+    ; Remove error code and interrupt number from stack
+    add rsp, 16
+
+    iretq
+
+; INT 0x80 - Syscall
+isr128:
+    push qword 0        ; Push dummy error code
+    push qword 128      ; Push interrupt number
+    jmp syscall_common_stub
