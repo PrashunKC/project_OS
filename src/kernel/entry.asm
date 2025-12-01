@@ -73,13 +73,13 @@ _start:
     jz .no_long_mode
     
     ; ========================================================================
-    ; Set up identity-mapped page tables for first 2MB (using 2MB pages)
+    ; Set up identity-mapped page tables for first 4GB (using 2MB pages)
     ; ========================================================================
     
-    ; Clear page table area (16KB at pml4_table)
+    ; Clear ALL page table area (24KB: pml4 + pdpt + pd_table)
     mov edi, pml4_table
     xor eax, eax
-    mov ecx, 4096           ; 16KB = 4096 dwords
+    mov ecx, 6144           ; 24KB = 6144 dwords (4096 + 4096 + 16384 bytes)
     rep stosd
     
     ; Set up PML4[0] -> PDPT
@@ -111,15 +111,18 @@ _start:
     or eax, PAGE_PRESENT | PAGE_WRITABLE
     mov [pdpt_table + 24], eax
     
-    ; Now fill all 4 Page Directory tables (2048 entries total)
+    ; Now fill all 4 Page Directory tables (2048 entries total for 4GB)
+    ; Using 2MB huge pages: each entry maps 2MB of physical memory
     mov edi, pd_table
     mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE  ; 0x83
     mov ecx, 2048           ; 512 entries * 4 PDs = 2048 entries for 4GB
 .map_pd:
-    mov [edi], eax
-    add eax, 0x200000       ; Next 2MB
-    add edi, 8
-    loop .map_pd
+    mov dword [edi], eax    ; Low 32 bits of entry
+    mov dword [edi + 4], 0  ; High 32 bits = 0 (physical addr < 4GB)
+    add eax, 0x200000       ; Next 2MB physical address
+    add edi, 8              ; Next 8-byte entry
+    dec ecx
+    jnz .map_pd
     
     ; ========================================================================
     ; Enable PAE (Physical Address Extension)

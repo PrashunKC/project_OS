@@ -197,7 +197,7 @@ run-vbox-iso: iso
 	@echo "Setting up VirtualBox VM for ISO boot..."
 	-VBoxManage unregistervm "NBOS_ISO" --delete 2>/dev/null || true
 	VBoxManage createvm --name "NBOS_ISO" --ostype "Other_64" --register
-	VBoxManage modifyvm "NBOS_ISO" --memory 128 --vram 64 --graphicscontroller vboxvga --cpus 1 --hwvirtex on --longmode on
+	VBoxManage modifyvm "NBOS_ISO" --memory 128 --vram 128 --graphicscontroller vboxsvga --cpus 1 --hwvirtex on --longmode on
 	VBoxManage storagectl "NBOS_ISO" --name "IDE" --add ide
 	VBoxManage storageattach "NBOS_ISO" --storagectl "IDE" --port 0 --device 0 --type dvddrive --medium $(abspath $(BUILD_DIR)/main.iso)
 	@echo "Starting VirtualBox..."

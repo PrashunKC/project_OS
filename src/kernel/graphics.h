@@ -68,3 +68,16 @@ int graphics_get_font_height(void);
 #define COLOR_WINDOW_BG   RGB(192, 192, 192)
 #define COLOR_TITLE_BAR   RGB(0, 0, 128)    // Dark blue
 #define COLOR_TITLE_TEXT  RGB(255, 255, 255)
+
+// GUI Widget functions
+void graphics_draw_window(int x, int y, int w, int h, const char *title, uint32_t title_bg, uint32_t bg);
+void graphics_draw_button(int x, int y, int w, int h, const char *label, int pressed);
+void graphics_draw_panel(int x, int y, int w, int h, uint32_t bg, int style);
+void graphics_draw_3d_border(int x, int y, int w, int h, int raised);
+void graphics_draw_progress_bar(int x, int y, int w, int h, int percent, uint32_t fg, uint32_t bg);
+void graphics_draw_shadow_text(int x, int y, const char *str, uint32_t fg, uint32_t shadow);
+
+// Panel styles
+#define PANEL_FLAT    0
+#define PANEL_RAISED  1
+#define PANEL_SUNKEN  2

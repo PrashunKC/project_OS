@@ -4,6 +4,7 @@
 #include "console.h"
 #include "heap.h"
 #include "syscall.h"
+#include "graphics.h"
 
 // External functions from main.c (for VGA fallback)
 extern void kputc(char c, uint8_t color);
@@ -16,7 +17,20 @@ extern void set_cursor_col(int col);
 extern void set_cursor_row(int row);
 
 // Check if we're in graphics mode
-extern int is_graphics_mode(void);
+extern int is_graphics_mode();
+
+// GUI Terminal state
+static int gui_terminal_x = 0;
+static int gui_terminal_y = 0;
+static int gui_terminal_w = 0;
+static int gui_terminal_h = 0;
+static int gui_content_x = 0;
+static int gui_content_y = 0;
+static int gui_content_w = 0;
+static int gui_content_h = 0;
+static int gui_title_bar_height = 24;
+static int gui_border_width = 4;
+static int gui_mode = 0;  // 1 if GUI terminal is active
 
 // Helper for port I/O
 static inline uint8_t inb(uint16_t port) {
@@ -47,9 +61,198 @@ static int strlen(const char *str) {
   return len;
 }
 
-// Wrapper functions for output (use graphics console if available)
+// Draw the GUI terminal window
+static void draw_gui_terminal(void) {
+  if (!is_graphics_mode() || !graphics_is_available()) {
+    return;
+  }
+  
+  FramebufferInfo *fb = graphics_get_info();
+  if (!fb || fb->framebuffer_addr == 0 || fb->width == 0 || fb->height == 0) {
+    return;  // Safety check
+  }
+  
+  int screen_w = fb->width;
+  int screen_h = fb->height;
+  
+  // Calculate terminal window size (nearly full screen with margin)
+  int margin = 20;
+  gui_terminal_x = margin;
+  gui_terminal_y = margin;
+  gui_terminal_w = screen_w - margin * 2;
+  gui_terminal_h = screen_h - margin * 2;
+  
+  // Calculate content area (inside window, below title bar)
+  gui_content_x = gui_terminal_x + gui_border_width + 2;
+  gui_content_y = gui_terminal_y + gui_title_bar_height + gui_border_width + 2;
+  gui_content_w = gui_terminal_w - (gui_border_width + 2) * 2;
+  gui_content_h = gui_terminal_h - gui_title_bar_height - (gui_border_width + 2) * 2;
+  
+  // Draw desktop background
+  graphics_clear(COLOR_DESKTOP_BG);
+  
+  // Draw the window with title bar
+  graphics_draw_window(gui_terminal_x, gui_terminal_y, gui_terminal_w, gui_terminal_h,
+                       "project_OS Terminal", COLOR_TITLE_BAR, COLOR_WINDOW_BG);
+  
+  // Draw a sunken content area (terminal text area with black background)
+  graphics_draw_panel(gui_content_x - 2, gui_content_y - 2, 
+                      gui_content_w + 4, gui_content_h + 4,
+                      0x000000, PANEL_SUNKEN);
+  
+  gui_mode = 1;
+}
+
+// Custom console functions that respect GUI terminal bounds
+static int gui_cursor_row = 0;
+static int gui_cursor_col = 0;
+static int gui_console_cols = 0;
+static int gui_console_rows = 0;
+
+// Cursor state
+static int cursor_visible = 0;
+static uint32_t cursor_blink_counter = 0;
+#define CURSOR_BLINK_RATE 50000  // Adjust for blink speed
+
+// Draw cursor at current position
+static void draw_cursor(int visible) {
+  if (!gui_mode) return;
+  
+  int x = gui_content_x + gui_cursor_col * 8;
+  int y = gui_content_y + gui_cursor_row * 16;
+  
+  if (visible) {
+    // Draw a block cursor (inverted colors)
+    graphics_fill_rect(x, y + 14, 8, 2, 0x00FF00);  // Green underscore cursor
+  } else {
+    // Erase cursor
+    graphics_fill_rect(x, y + 14, 8, 2, 0x000000);
+  }
+}
+
+// Toggle cursor visibility (called periodically)
+static void toggle_cursor(void) {
+  cursor_visible = !cursor_visible;
+  draw_cursor(cursor_visible);
+}
+
+// Hide cursor before moving/typing
+static void hide_cursor(void) {
+  if (cursor_visible) {
+    draw_cursor(0);
+    cursor_visible = 0;
+  }
+}
+
+// Show cursor after moving/typing
+static void show_cursor(void) {
+  draw_cursor(1);
+  cursor_visible = 1;
+}
+
+static void gui_console_init(void) {
+  gui_cursor_row = 0;
+  gui_cursor_col = 0;
+  gui_console_cols = gui_content_w / 8;  // 8 pixels per char
+  gui_console_rows = gui_content_h / 16; // 16 pixels per char
+}
+
+static void gui_console_scroll(void) {
+  if (!graphics_is_available()) return;
+  
+  FramebufferInfo *fb = graphics_get_info();
+  if (!fb || fb->framebuffer_addr == 0) return;
+  
+  int bytes_per_pixel = fb->bpp / 8;
+  if (bytes_per_pixel < 3 || bytes_per_pixel > 4) return;  // Sanity check
+  
+  // Use a safer approach: read/write pixels through the graphics API
+  // This is slower but safer than direct framebuffer manipulation
+  for (int row = 0; row < gui_console_rows - 1; row++) {
+    int dst_y = gui_content_y + row * 16;
+    int src_y = gui_content_y + (row + 1) * 16;
+    
+    for (int line = 0; line < 16; line++) {
+      for (int x = 0; x < gui_content_w; x++) {
+        uint32_t pixel = graphics_get_pixel(gui_content_x + x, src_y + line);
+        graphics_put_pixel(gui_content_x + x, dst_y + line, pixel);
+      }
+    }
+  }
+  
+  // Clear last row
+  int last_row_y = gui_content_y + (gui_console_rows - 1) * 16;
+  graphics_fill_rect(gui_content_x, last_row_y, gui_content_w, 16, 0x000000);
+}
+
+static void gui_console_putchar(char c, uint32_t color) {
+  if (!gui_mode) return;
+  
+  // Hide cursor before modifying
+  hide_cursor();
+  
+  if (c == '\n') {
+    gui_cursor_col = 0;
+    gui_cursor_row++;
+  } else if (c == '\r') {
+    gui_cursor_col = 0;
+  } else if (c == '\b') {
+    if (gui_cursor_col > 0) {
+      gui_cursor_col--;
+      int x = gui_content_x + gui_cursor_col * 8;
+      int y = gui_content_y + gui_cursor_row * 16;
+      graphics_fill_rect(x, y, 8, 16, 0x000000);
+    }
+  } else if (c == '\t') {
+    gui_cursor_col = (gui_cursor_col + 8) & ~7;
+    if (gui_cursor_col >= gui_console_cols) {
+      gui_cursor_col = 0;
+      gui_cursor_row++;
+    }
+  } else {
+    int x = gui_content_x + gui_cursor_col * 8;
+    int y = gui_content_y + gui_cursor_row * 16;
+    graphics_draw_char(x, y, c, color, 0x000000);
+    gui_cursor_col++;
+    
+    if (gui_cursor_col >= gui_console_cols) {
+      gui_cursor_col = 0;
+      gui_cursor_row++;
+    }
+  }
+  
+  // Handle scrolling
+  if (gui_cursor_row >= gui_console_rows) {
+    gui_console_scroll();
+    gui_cursor_row = gui_console_rows - 1;
+  }
+  
+  // Show cursor at new position
+  show_cursor();
+}
+
+static void gui_console_print(const char *str, uint32_t color) {
+  while (*str) {
+    gui_console_putchar(*str, color);
+    str++;
+  }
+}
+
+static void gui_console_newline(void) {
+  gui_cursor_col = 0;
+  gui_cursor_row++;
+  
+  if (gui_cursor_row >= gui_console_rows) {
+    gui_console_scroll();
+    gui_cursor_row = gui_console_rows - 1;
+  }
+}
+
+// Wrapper functions for output (use GUI console if available)
 static void shell_print(const char *str, uint32_t color) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    gui_console_print(str, color);
+  } else if (is_graphics_mode()) {
     console_print(str, color);
   } else {
     // Map 32-bit color to VGA color (simplified)
@@ -68,7 +271,9 @@ static void shell_print(const char *str, uint32_t color) {
 }
 
 static void shell_putc(char c, uint32_t color) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    gui_console_putchar(c, color);
+  } else if (is_graphics_mode()) {
     console_putchar(c, color);
   } else {
     uint8_t vga_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLACK);
@@ -77,7 +282,9 @@ static void shell_putc(char c, uint32_t color) {
 }
 
 static void shell_newline(void) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    gui_console_newline();
+  } else if (is_graphics_mode()) {
     console_newline();
   } else {
     knewline();
@@ -85,7 +292,11 @@ static void shell_newline(void) {
 }
 
 static void shell_clear(void) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    // Redraw the GUI terminal
+    draw_gui_terminal();
+    gui_console_init();
+  } else if (is_graphics_mode()) {
     console_clear(CONSOLE_COLOR_BLACK);
   } else {
     clear_screen(VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
@@ -93,7 +304,9 @@ static void shell_clear(void) {
 }
 
 static int shell_get_col(void) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    return gui_cursor_col;
+  } else if (is_graphics_mode()) {
     return console_get_col();
   } else {
     return get_cursor_col();
@@ -101,7 +314,9 @@ static int shell_get_col(void) {
 }
 
 static int shell_get_row(void) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    return gui_cursor_row;
+  } else if (is_graphics_mode()) {
     return console_get_row();
   } else {
     return get_cursor_row();
@@ -109,7 +324,13 @@ static int shell_get_row(void) {
 }
 
 static void shell_set_col(int col) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    hide_cursor();
+    if (col >= 0 && col < gui_console_cols) {
+      gui_cursor_col = col;
+    }
+    show_cursor();
+  } else if (is_graphics_mode()) {
     console_set_col(col);
   } else {
     set_cursor_col(col);
@@ -117,7 +338,13 @@ static void shell_set_col(int col) {
 }
 
 static void shell_set_row(int row) {
-  if (is_graphics_mode()) {
+  if (gui_mode) {
+    hide_cursor();
+    if (row >= 0 && row < gui_console_rows) {
+      gui_cursor_row = row;
+    }
+    show_cursor();
+  } else if (is_graphics_mode()) {
     console_set_row(row);
   } else {
     set_cursor_row(row);
@@ -298,18 +525,97 @@ static void cmd_peek(const char *args) {
   shell_newline();
 }
 
+// Flag to indicate we're waiting to dismiss a dialog
+static volatile int dialog_active = 0;
+
+// Redraw the GUI terminal (called after closing dialog)
+static void redraw_gui_terminal(void) {
+  if (!gui_mode) return;
+  
+  // Redraw the terminal window
+  draw_gui_terminal();
+  gui_console_init();
+}
+
+// Show a GUI message box (centered on screen)
+static void show_message_box(const char *title, const char **lines, int line_count) {
+  if (!gui_mode || !graphics_is_available()) {
+    // Fallback to text mode
+    shell_newline();
+    shell_print(title, CONSOLE_COLOR_YELLOW);
+    shell_newline();
+    for (int i = 0; i < line_count; i++) {
+      shell_print(lines[i], CONSOLE_COLOR_WHITE);
+      shell_newline();
+    }
+    return;
+  }
+  
+  FramebufferInfo *fb = graphics_get_info();
+  int screen_w = fb->width;
+  int screen_h = fb->height;
+  
+  // Calculate box size
+  int max_len = strlen(title);
+  for (int i = 0; i < line_count; i++) {
+    int len = strlen(lines[i]);
+    if (len > max_len) max_len = len;
+  }
+  
+  int box_w = (max_len + 4) * 8 + 20;  // char width + padding
+  int box_h = (line_count + 4) * 16 + 60;  // lines + title + padding + button
+  
+  // Ensure minimum size
+  if (box_w < 250) box_w = 250;
+  if (box_h < 120) box_h = 120;
+  
+  int box_x = (screen_w - box_w) / 2;
+  int box_y = (screen_h - box_h) / 2;
+  
+  // Draw dialog window
+  graphics_draw_window(box_x, box_y, box_w, box_h, title, COLOR_TITLE_BAR, COLOR_WINDOW_BG);
+  
+  // Draw message lines
+  int text_y = box_y + 40;
+  for (int i = 0; i < line_count; i++) {
+    int text_x = box_x + 20;
+    graphics_draw_string(text_x, text_y, lines[i], COLOR_BLACK, COLOR_WINDOW_BG);
+    text_y += 18;
+  }
+  
+  // Draw OK button at bottom
+  int btn_w = 80;
+  int btn_h = 25;
+  int btn_x = box_x + (box_w - btn_w) / 2;
+  int btn_y = box_y + box_h - btn_h - 15;
+  graphics_draw_button(btn_x, btn_y, btn_w, btn_h, "OK", 0);
+  
+  // Draw hint text
+  graphics_draw_string(box_x + 10, box_y + box_h - 35, 
+                       "Press any key to close", COLOR_GRAY, COLOR_WINDOW_BG);
+  
+  // Set dialog active flag
+  dialog_active = 1;
+}
+
 // Built-in command: about
 static void cmd_about(void) {
-  shell_newline();
-  shell_print("project_OS - A Custom Operating System\n", CONSOLE_COLOR_YELLOW);
-  shell_print("Version: 1.0.0\n", CONSOLE_COLOR_WHITE);
-  shell_print("Features:\n", CONSOLE_COLOR_WHITE);
-  shell_print("  - 64-bit Long Mode\n", CONSOLE_COLOR_GRAY);
-  shell_print("  - VESA Graphics Console\n", CONSOLE_COLOR_GRAY);
-  shell_print("  - Interrupt Handling (IDT)\n", CONSOLE_COLOR_GRAY);
-  shell_print("  - PS/2 Keyboard Driver\n", CONSOLE_COLOR_GRAY);
-  shell_print("  - Interactive Shell\n", CONSOLE_COLOR_GRAY);
-  shell_print("  - Syscall Interface\n", CONSOLE_COLOR_GRAY);
+  const char *lines[] = {
+    "A Custom 64-bit Operating System",
+    "",
+    "Version: 1.0.0",
+    "",
+    "Features:",
+    "  - 64-bit Long Mode",
+    "  - VESA Graphics Mode",
+    "  - GUI Terminal Interface",
+    "  - Interrupt Handling (IDT)",
+    "  - PS/2 Keyboard Driver",
+    "  - Interactive Shell",
+    "  - Syscall Interface"
+  };
+  
+  show_message_box("About project_OS", lines, 12);
 }
 
 // Helper to print 32-bit hex value
@@ -689,6 +995,16 @@ static void redraw_line(void) {
 
 // Handle character input
 void shell_putchar(char c) {
+  // If a dialog is active, any key dismisses it
+  if (dialog_active) {
+    dialog_active = 0;
+    redraw_gui_terminal();
+    shell_print("Welcome to project_OS Shell!\n", CONSOLE_COLOR_LIGHT_GREEN);
+    shell_print("Type 'help' for available commands.\n\n", CONSOLE_COLOR_GRAY);
+    show_prompt();
+    return;
+  }
+  
   if (c == '\n') {
     // Move cursor to end of line before executing
     int len = strlen(input_buffer);
@@ -697,7 +1013,7 @@ void shell_putchar(char c) {
       // This is tricky if we wrapped lines, but assuming single line for now
       // Simple hack: just print newline
     }
-    execute_command();
+    execute_command();;
   } else if (c == '\b') {
     // Handle backspace
     if (input_pos > 0) {
@@ -743,6 +1059,16 @@ void shell_putchar(char c) {
 
 // Handle arrow keys
 void shell_handle_arrow(uint8_t scancode) {
+  // If a dialog is active, any key dismisses it
+  if (dialog_active) {
+    dialog_active = 0;
+    redraw_gui_terminal();
+    shell_print("Welcome to project_OS Shell!\n", CONSOLE_COLOR_LIGHT_GREEN);
+    shell_print("Type 'help' for available commands.\n\n", CONSOLE_COLOR_GRAY);
+    show_prompt();
+    return;
+  }
+  
   if (scancode == 0x4B) { // Left Arrow
     // Move cursor left visually and update input_pos (insertion point)
     if (input_pos > 0) {
@@ -763,15 +1089,29 @@ void shell_handle_arrow(uint8_t scancode) {
 }
 
 // Initialize shell
-void shell_init(void) { input_pos = 0; }
+void shell_init(void) { 
+  input_pos = 0;
+  gui_mode = 0;
+  cursor_visible = 0;
+}
 
 // Run shell
 void shell_run(void) {
-  shell_newline();
+  // Initialize GUI terminal if in graphics mode
+  if (is_graphics_mode() && graphics_is_available()) {
+    draw_gui_terminal();
+    gui_console_init();
+  }
+  
   shell_print("Welcome to project_OS Shell!\n", CONSOLE_COLOR_LIGHT_GREEN);
   shell_print("Type 'help' for available commands.\n\n", CONSOLE_COLOR_GRAY);
 
   show_prompt();
+  
+  // Show initial cursor
+  if (gui_mode) {
+    show_cursor();
+  }
 
   // Shell runs in infinite loop - keyboard interrupt will call shell_putchar
   for (;;) {

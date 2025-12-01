@@ -506,3 +506,111 @@ int graphics_get_font_width(void) {
 int graphics_get_font_height(void) { 
   return FONT_HEIGHT; 
 }
+
+// Draw a 3D-style border (Windows 95 style)
+void graphics_draw_3d_border(int x, int y, int w, int h, int raised) {
+  uint32_t light = RGB(255, 255, 255);
+  uint32_t dark = RGB(128, 128, 128);
+  uint32_t darker = RGB(64, 64, 64);
+  
+  if (raised) {
+    // Top and left edges (light)
+    graphics_draw_line(x, y, x + w - 1, y, light);
+    graphics_draw_line(x, y, x, y + h - 1, light);
+    // Bottom and right edges (dark)
+    graphics_draw_line(x, y + h - 1, x + w - 1, y + h - 1, darker);
+    graphics_draw_line(x + w - 1, y, x + w - 1, y + h - 1, darker);
+    // Inner shadow
+    graphics_draw_line(x + 1, y + h - 2, x + w - 2, y + h - 2, dark);
+    graphics_draw_line(x + w - 2, y + 1, x + w - 2, y + h - 2, dark);
+  } else {
+    // Sunken: reverse the colors
+    graphics_draw_line(x, y, x + w - 1, y, darker);
+    graphics_draw_line(x, y, x, y + h - 1, darker);
+    graphics_draw_line(x + 1, y + 1, x + w - 2, y + 1, dark);
+    graphics_draw_line(x + 1, y + 1, x + 1, y + h - 2, dark);
+    graphics_draw_line(x, y + h - 1, x + w - 1, y + h - 1, light);
+    graphics_draw_line(x + w - 1, y, x + w - 1, y + h - 1, light);
+  }
+}
+
+// Draw a panel with optional 3D border
+void graphics_draw_panel(int x, int y, int w, int h, uint32_t bg, int style) {
+  graphics_fill_rect(x, y, w, h, bg);
+  if (style == 1) {  // PANEL_RAISED
+    graphics_draw_3d_border(x, y, w, h, 1);
+  } else if (style == 2) {  // PANEL_SUNKEN
+    graphics_draw_3d_border(x, y, w, h, 0);
+  }
+}
+
+// Draw a window with title bar
+void graphics_draw_window(int x, int y, int w, int h, const char *title, uint32_t title_bg, uint32_t bg) {
+  int title_height = FONT_HEIGHT + 6;
+  
+  // Window background
+  graphics_fill_rect(x, y, w, h, bg);
+  
+  // Outer 3D border (raised)
+  graphics_draw_3d_border(x, y, w, h, 1);
+  
+  // Title bar
+  graphics_fill_rect(x + 3, y + 3, w - 6, title_height, title_bg);
+  
+  // Title text (centered)
+  int title_len = 0;
+  const char *t = title;
+  while (*t++) title_len++;
+  int text_x = x + (w - title_len * FONT_WIDTH) / 2;
+  int text_y = y + 5;
+  graphics_draw_string(text_x, text_y, title, RGB(255, 255, 255), title_bg);
+  
+  // Inner content area border (sunken)
+  int content_y = y + title_height + 5;
+  int content_h = h - title_height - 8;
+  graphics_draw_3d_border(x + 3, content_y, w - 6, content_h, 0);
+}
+
+// Draw a button
+void graphics_draw_button(int x, int y, int w, int h, const char *label, int pressed) {
+  uint32_t bg = RGB(192, 192, 192);
+  
+  graphics_fill_rect(x, y, w, h, bg);
+  graphics_draw_3d_border(x, y, w, h, !pressed);
+  
+  // Center label
+  int label_len = 0;
+  const char *l = label;
+  while (*l++) label_len++;
+  int text_x = x + (w - label_len * FONT_WIDTH) / 2;
+  int text_y = y + (h - FONT_HEIGHT) / 2;
+  if (pressed) {
+    text_x++;
+    text_y++;
+  }
+  graphics_draw_string(text_x, text_y, label, RGB(0, 0, 0), bg);
+}
+
+// Draw a progress bar
+void graphics_draw_progress_bar(int x, int y, int w, int h, int percent, uint32_t fg, uint32_t bg) {
+  if (percent < 0) percent = 0;
+  if (percent > 100) percent = 100;
+  
+  // Background with sunken border
+  graphics_fill_rect(x, y, w, h, bg);
+  graphics_draw_3d_border(x, y, w, h, 0);
+  
+  // Fill bar
+  int fill_w = ((w - 4) * percent) / 100;
+  if (fill_w > 0) {
+    graphics_fill_rect(x + 2, y + 2, fill_w, h - 4, fg);
+  }
+}
+
+// Draw text with drop shadow
+void graphics_draw_shadow_text(int x, int y, const char *str, uint32_t fg, uint32_t shadow) {
+  // Draw shadow first (offset by 1,1)
+  graphics_draw_string(x + 1, y + 1, str, shadow, shadow);
+  // Draw foreground text (transparent background - use shadow color)
+  graphics_draw_string(x, y, str, fg, shadow);
+}
