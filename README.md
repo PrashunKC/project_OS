@@ -76,7 +76,18 @@ Kernel is now idle. Press Ctrl+Alt+Del to reboot.
 7. [How Everything Works Together](#how-everything-works-together)
 8. [Building and Running](#building-and-running)
 9. [Technical Details](#technical-details)
-10. [Design Philosophy and Lessons Learned](#design-philosophy-and-lessons-learned)
+10. [Implementation Deep-Dive: Code Walkthrough](#implementation-deep-dive-code-walkthrough)
+    - [Stage 1 Bootloader: Complete Code Analysis](#stage-1-bootloader-complete-code-analysis)
+    - [Stage 2 Bootloader: C/Assembly Integration](#stage-2-bootloader-cassembly-integration)
+    - [Kernel: 64-bit Long Mode Implementation](#kernel-64-bit-long-mode-implementation)
+    - [Interrupt Handling Implementation](#interrupt-handling-implementation)
+    - [Keyboard Driver Implementation](#keyboard-driver-implementation)
+    - [VGA Text Mode Implementation](#vga-text-mode-implementation)
+    - [FAT12 Implementation Details](#fat12-implementation-details)
+    - [Shell Implementation](#shell-implementation)
+11. [Future Enhancement Ideas](#future-enhancement-ideas)
+12. [How to Extend This OS](#how-to-extend-this-os)
+13. [Design Philosophy and Lessons Learned](#design-philosophy-and-lessons-learned)
 
 ---
 
@@ -5274,6 +5285,715 @@ Stage 2 will grow significantly as features are added (target: ~10-20 KB).
 
 ---
 
+## Implementation Deep-Dive: Code Walkthrough
+
+This section provides granular, line-by-line explanations of how our OS implementation works. It covers the actual code patterns, register usage, and low-level details that make everything function.
+
+### Stage 1 Bootloader: Complete Code Analysis
+
+Our Stage 1 bootloader (`src/bootloader/stage1/boot.asm`) is exactly 512 bytes and implements FAT12 filesystem reading. Here's how each part works:
+
+#### FAT12 BIOS Parameter Block (BPB)
+
+```assembly
+; Lines 8-36: FAT12 Header Structure
+; This MUST be at the beginning of the boot sector for BIOS/filesystem compatibility
+
+jmp short start        ; 2 bytes: Jump over BPB (EB xx)
+nop                    ; 1 byte: NOP padding (90)
+
+bdb_oem:                    db 'MSWIN4.1'           ; OEM identifier (8 bytes)
+bdb_bytes_per_sector:       dw 512                  ; ALWAYS 512 for floppies
+bdb_sectors_per_cluster:    db 1                    ; 1 sector = 1 cluster (simplest)
+bdb_reserved_sectors:       dw 1                    ; Just the boot sector
+bdb_fat_count:              db 2                    ; Two FAT copies for redundancy
+bdb_dir_entries_count:      dw 0E0h                 ; 224 entries (14 sectors worth)
+bdb_total_sectors:          dw 2880                 ; 1.44 MB floppy = 2880 sectors
+bdb_media_descriptor_type:  db 0F0h                 ; 0xF0 = 3.5" floppy
+bdb_sectors_per_fat:        dw 9                    ; Each FAT is 9 sectors
+bdb_sectors_per_track:      dw 18                   ; 18 sectors per track (standard)
+bdb_heads:                  dw 2                    ; 2 heads (double-sided)
+bdb_hidden_sectors:         dd 0                    ; No hidden sectors
+bdb_large_sector_count:     dd 0                    ; Not used for small disks
+```
+
+**Why these values matter:**
+- The BPB tells both BIOS and our code how the disk is formatted
+- Changing `bdb_bytes_per_sector` from 512 would break everything
+- `bdb_dir_entries_count` of 224 allows 224 files in root directory
+- Each directory entry is 32 bytes, so root dir = 224 × 32 = 7168 bytes = 14 sectors
+
+#### Segment and Stack Initialization
+
+```assembly
+; Lines 38-51: Hardware initialization
+start:
+    mov ax, 0           ; Can't directly write to segment registers
+    mov ds, ax          ; DS = 0 (data segment)
+    mov es, ax          ; ES = 0 (extra segment)
+    mov ss, ax          ; SS = 0 (stack segment)
+    mov sp, 0x7C00      ; Stack starts at bootloader address, grows DOWN
+
+    ; Far jump trick to set CS to 0
+    push es             ; Push segment 0
+    push word .after    ; Push offset of .after
+    retf                ; Far return = sets CS:IP
+.after:
+```
+
+**Why `retf` for CS?**
+- You cannot directly `mov` to CS register
+- `retf` pops IP then CS from stack
+- This ensures CS=0 matching DS, ES, SS for consistent addressing
+- All our addresses will be `0:offset` format
+
+#### Disk Geometry Detection
+
+```assembly
+; Lines 61-72: Get disk parameters from BIOS
+    mov [ebr_drive_number], dl   ; DL contains boot drive (passed by BIOS)
+    
+    push es
+    mov ah, 08h                  ; BIOS function: Get drive parameters
+    int 13h                      ; Call BIOS disk interrupt
+    jc floppy_error_params       ; Jump if carry flag set (error)
+    pop es
+    
+    and cl, 0x3F                 ; Extract sectors (bits 0-5)
+    xor ch, ch                   ; Clear high byte
+    mov [bdb_sectors_per_track], cx  ; Save sectors per track
+    
+    inc dh                       ; DH = number of heads - 1, so add 1
+    mov [bdb_heads], dh          ; Save number of heads
+```
+
+**Register usage after INT 13h, AH=08h:**
+- DL = drive number (unchanged)
+- DH = number of heads - 1
+- CL bits 5-0 = sectors per track
+- CL bits 7-6 + CH = cylinders - 1
+- Carry flag = error status
+
+#### Root Directory Loading
+
+```assembly
+; Lines 74-95: Calculate and load root directory
+    ; Root directory LBA = reserved_sectors + (fat_count × sectors_per_fat)
+    mov ax, [bdb_sectors_per_fat]    ; AX = 9 (sectors per FAT)
+    mov bl, [bdb_fat_count]          ; BL = 2 (number of FATs)
+    xor bh, bh                       ; Clear high byte
+    mul bx                           ; AX = 9 × 2 = 18
+    add ax, [bdb_reserved_sectors]   ; AX = 18 + 1 = 19 (root dir LBA)
+    push ax                          ; Save root dir LBA for later
+    
+    ; Root directory size = (32 × dir_entries) / bytes_per_sector
+    mov ax, [bdb_dir_entries_count]  ; AX = 224
+    shl ax, 5                        ; AX = 224 × 32 = 7168 (shift left 5 = × 32)
+    xor dx, dx                       ; Clear for division
+    div word [bdb_bytes_per_sector]  ; AX = 7168 / 512 = 14 sectors
+    
+    mov cl, al                       ; CL = 14 (sectors to read)
+    pop ax                           ; AX = 19 (root dir LBA)
+    mov dl, [ebr_drive_number]       ; DL = boot drive
+    mov bx, buffer                   ; ES:BX = buffer address
+    call disk_read                   ; Read root directory
+```
+
+**Memory layout after this:**
+- `buffer` (at 0x7E00) contains 14 sectors of root directory
+- Each sector = 512 bytes, so buffer contains 7168 bytes
+- This holds all 224 directory entries (32 bytes each)
+
+#### FAT12 Cluster Chain Following
+
+```assembly
+; Lines 175-200: FAT12 cluster chain traversal
+    ; FAT12 uses 12-bit cluster numbers packed into bytes
+    ; Even clusters: low 12 bits of word at (cluster × 3 / 2)
+    ; Odd clusters: high 12 bits of word at (cluster × 3 / 2)
+    
+    mov ax, [stage2_cluster]    ; Current cluster number
+    mov cx, 3
+    mul cx                      ; AX = cluster × 3
+    mov cx, 2
+    div cx                      ; AX = (cluster × 3) / 2
+                                ; DX = remainder (0 = even, 1 = odd)
+    
+    mov si, buffer              ; SI = FAT buffer start
+    add si, ax                  ; SI = FAT buffer + offset
+    mov ax, [ds:si]             ; Load 16-bit word from FAT
+    
+    or dx, dx                   ; Check if even or odd cluster
+    jz .even
+    
+.odd:
+    shr ax, 4                   ; Odd: shift right 4 bits (use high 12 bits)
+    jmp .next_cluster_after
+    
+.even:
+    and ax, 0x0FFF              ; Even: mask to low 12 bits
+    
+.next_cluster_after:
+    cmp ax, 0x0FF8              ; Check for end-of-chain marker
+    jae .read_finish            ; >= 0xFF8 means EOF
+    
+    mov [stage2_cluster], ax    ; Save next cluster
+    jmp .load_stage2_loop       ; Continue loading
+```
+
+**FAT12 Cluster Packing Example:**
+```
+Byte offset:  0   1   2   3   4   5
+Binary:      [AB][CD][EF][GH][IJ][KL]
+
+Cluster 0 (even): 0x0DAB (bytes 0-1, low 12 bits)
+Cluster 1 (odd):  0x0EFC (bytes 1-2, high 12 bits, shifted right 4)
+Cluster 2 (even): 0x0GHE (bytes 3-4, low 12 bits)
+...and so on
+```
+
+#### LBA to CHS Conversion
+
+```assembly
+; Lines 247-269: Convert Logical Block Address to Cylinder/Head/Sector
+lba_to_chs:
+    push ax
+    push dx
+    
+    ; Sector = (LBA % sectors_per_track) + 1
+    xor dx, dx                              ; Clear DX for division
+    div word [bdb_sectors_per_track]        ; AX = LBA / SPT, DX = LBA % SPT
+    inc dx                                  ; Sectors are 1-indexed!
+    mov cx, dx                              ; CX = sector (bits 0-5)
+    
+    ; Head and Cylinder
+    xor dx, dx                              ; Clear DX
+    div word [bdb_heads]                    ; AX = temp / heads = cylinder
+                                            ; DX = temp % heads = head
+    mov dh, dl                              ; DH = head
+    mov ch, al                              ; CH = cylinder low 8 bits
+    shl ah, 6                               ; AH bits 0-1 become bits 6-7
+    or cl, ah                               ; CL = sector + cylinder high 2 bits
+    
+    pop ax
+    mov dl, al                              ; Restore DL (drive number)
+    pop ax
+    ret
+```
+
+**CHS Format for INT 13h:**
+- CH = cylinder low 8 bits
+- CL bits 0-5 = sector (1-63)
+- CL bits 6-7 = cylinder high 2 bits
+- DH = head (0-255)
+- DL = drive number
+
+### Stage 2 Bootloader: C/Assembly Integration
+
+Stage 2 demonstrates how to integrate C code with bare-metal assembly.
+
+#### Assembly Entry Point Analysis
+
+```assembly
+; src/bootloader/stage2/main.asm - Entry point
+bits 16
+section _ENTRY class=CODE
+
+extern _cstart_     ; C function (Open Watcom adds underscore prefix)
+global entry
+
+entry:
+    cli             ; Disable interrupts during critical setup
+    
+    ; Setup segments - DS already set by Stage 1
+    mov ax, ds      ; Copy DS to AX
+    mov ss, ax      ; SS = DS (same segment for stack)
+    mov sp, 0       ; SP = 0, stack grows DOWN from 0xFFFF
+    mov bp, sp      ; BP = 0 (base pointer for stack frames)
+    
+    sti             ; Re-enable interrupts
+    
+    ; Prepare C function call
+    xor dh, dh      ; Clear DH (DL contains boot drive from Stage 1)
+    push dx         ; Push boot drive as 16-bit parameter
+    call _cstart_   ; Call C entry point
+    
+    ; If C returns (shouldn't happen), halt
+    cli
+    hlt
+```
+
+**Open Watcom Calling Convention:**
+1. Parameters pushed right-to-left onto stack
+2. Caller cleans up stack after call
+3. Return value in AX (16-bit) or DX:AX (32-bit)
+4. All C function names prefixed with underscore
+
+#### C Entry Point Implementation
+
+```c
+// src/bootloader/stage2/main.c
+
+#define _cdecl __attribute__((cdecl))
+
+void _cdecl cstart_(uint16_t bootDrive) {
+    // bootDrive parameter is on stack at [BP+4]
+    
+    // Initialize disk subsystem
+    DISK disk;
+    if (!DISK_Initialize(&disk, (uint8_t)bootDrive)) {
+        printf("[ERR] Could not initialize disk!\r\n");
+        goto end;
+    }
+    
+    // Initialize FAT filesystem
+    if (!FAT_Initialize(&disk)) {
+        printf("[ERR] Could not initialize FAT!\r\n");
+        goto end;
+    }
+    
+    // Load kernel from filesystem
+    FAT_File *fd = FAT_Open(&disk, "/kernel.bin");
+    if (fd == NULL) {
+        printf("[ERR] kernel.bin not found!\r\n");
+        goto end;
+    }
+    
+    // Read kernel to temporary buffer
+    uint8_t *kernelBuffer = (uint8_t *)0x30000;
+    uint32_t read = FAT_Read(&disk, fd, fd->Size, kernelBuffer);
+    FAT_Close(fd);
+    
+    // Copy to high memory (1MB mark)
+    uint8_t *kernelStart = (uint8_t *)0x100000;
+    memcpy(kernelStart, kernelBuffer, read);
+    
+    // Jump to kernel entry point
+    // (Protected mode transition handled by inline assembly)
+    
+end:
+    for (;;);  // Halt on error
+}
+```
+
+#### BIOS Interrupt Wrapper
+
+```assembly
+; src/bootloader/stage2/x86.asm - BIOS INT 10h wrapper
+
+global _x86_Video_WriteCharTeletype
+_x86_Video_WriteCharTeletype:
+    ; Function signature: void x86_Video_WriteCharTeletype(char c, uint8_t page)
+    ; Stack on entry:
+    ;   [BP+0] = saved BP
+    ;   [BP+2] = return address
+    ;   [BP+4] = character (uint8_t, stored as word)
+    ;   [BP+6] = page (uint8_t, stored as word)
+    
+    push bp
+    mov bp, sp
+    
+    mov ah, 0x0E            ; BIOS teletype function
+    mov al, [bp + 4]        ; Character to print
+    mov bh, [bp + 6]        ; Page number (usually 0)
+    
+    int 0x10                ; Call BIOS video interrupt
+    
+    mov sp, bp
+    pop bp
+    ret
+```
+
+### Kernel: 64-bit Long Mode Implementation
+
+Our kernel transitions from 32-bit protected mode to 64-bit long mode.
+
+#### Multiboot Header
+
+```assembly
+; src/kernel/entry.asm - Multiboot header
+section .multiboot
+align 4
+
+MULTIBOOT_MAGIC        equ 0x1BADB002
+MULTIBOOT_PAGE_ALIGN   equ 1 << 0
+MULTIBOOT_MEMORY_INFO  equ 1 << 1
+MULTIBOOT_FLAGS        equ MULTIBOOT_PAGE_ALIGN | MULTIBOOT_MEMORY_INFO
+MULTIBOOT_CHECKSUM     equ -(MULTIBOOT_MAGIC + MULTIBOOT_FLAGS)
+
+multiboot_header:
+    dd MULTIBOOT_MAGIC      ; Magic number
+    dd MULTIBOOT_FLAGS      ; Flags
+    dd MULTIBOOT_CHECKSUM   ; Checksum (must sum to 0)
+```
+
+**Multiboot Protocol:**
+- GRUB/our bootloader passes magic in EAX (0x2BADB002)
+- Info structure pointer in EBX
+- Allows booting by any Multiboot-compliant loader
+
+#### Long Mode Transition
+
+```assembly
+; Lines 37-156: Complete long mode setup
+
+_start:
+    cli                     ; Disable interrupts
+    
+    ; Save multiboot info
+    mov edi, eax           ; Save magic in EDI (preserved to RDI in 64-bit)
+    mov esi, ebx           ; Save info pointer in ESI (preserved to RSI)
+    
+    ; Set up temporary 32-bit stack
+    mov esp, stack_top
+    mov ebp, esp
+    
+    ; Check for Long Mode support
+    mov eax, 0x80000001    ; Extended CPUID
+    cpuid
+    test edx, 1 << 29      ; Check LM bit (bit 29 of EDX)
+    jz .no_long_mode       ; Jump if Long Mode not supported
+    
+    ; === Set up 4-level paging ===
+    
+    ; Clear page tables (16KB at pml4_table)
+    mov edi, pml4_table
+    xor eax, eax
+    mov ecx, 4096          ; 16KB = 4096 dwords
+    rep stosd
+    
+    ; PML4[0] -> PDPT
+    mov eax, pdpt_table
+    or eax, PAGE_PRESENT | PAGE_WRITABLE   ; 0x03
+    mov [pml4_table], eax
+    
+    ; PDPT[0] -> PD (using 2MB huge pages for simplicity)
+    mov eax, pd_table
+    or eax, PAGE_PRESENT | PAGE_WRITABLE
+    mov [pdpt_table], eax
+    
+    ; Fill Page Directory with 2MB pages (identity mapping first 4GB)
+    mov edi, pd_table
+    mov eax, PAGE_PRESENT | PAGE_WRITABLE | PAGE_HUGE  ; 0x83
+    mov ecx, 2048          ; 2048 × 2MB = 4GB
+.map_pd:
+    mov [edi], eax
+    add eax, 0x200000      ; Next 2MB physical address
+    add edi, 8             ; Next PD entry (8 bytes in 64-bit mode)
+    loop .map_pd
+    
+    ; === Enable PAE ===
+    mov eax, cr4
+    or eax, 1 << 5         ; PAE bit
+    mov cr4, eax
+    
+    ; === Load PML4 into CR3 ===
+    mov eax, pml4_table
+    mov cr3, eax
+    
+    ; === Enable Long Mode ===
+    mov ecx, 0xC0000080    ; EFER MSR
+    rdmsr
+    or eax, 1 << 8         ; LME bit
+    wrmsr
+    
+    ; === Enable Paging (activates Long Mode) ===
+    mov eax, cr0
+    or eax, 1 << 31        ; PG bit
+    mov cr0, eax
+    
+    ; === Far jump to 64-bit code ===
+    lgdt [gdt64_ptr]
+    jmp 0x08:long_mode_start   ; CS = 0x08 (64-bit code segment)
+```
+
+**Page Table Structure (4-level):**
+```
+PML4 (Page Map Level 4) - 512 entries × 8 bytes = 4KB
+  └── PDPT (Page Directory Pointer Table) - 512 entries × 8 bytes = 4KB
+       └── PD (Page Directory) - 512 entries × 8 bytes = 4KB
+            └── PT (Page Table) - 512 entries × 8 bytes = 4KB
+                 └── Physical page (4KB) or 2MB huge page
+
+We use 2MB huge pages for simplicity:
+- PD entry with PAGE_HUGE bit maps 2MB directly
+- No PT level needed
+- 512 PD entries × 2MB = 1GB per PDPT entry
+- 4 PDPT entries = 4GB total (enough for our kernel + framebuffer)
+```
+
+### Interrupt Handling Implementation
+
+#### IDT Structure (64-bit)
+
+```c
+// src/kernel/idt.h
+typedef struct {
+    uint16_t base_low;      // Offset bits 0-15
+    uint16_t sel;           // Code segment selector (0x08)
+    uint8_t  ist;           // Interrupt Stack Table (0 = disabled)
+    uint8_t  flags;         // Type and attributes
+    uint16_t base_mid;      // Offset bits 16-31
+    uint32_t base_high;     // Offset bits 32-63
+    uint32_t reserved;      // Must be 0
+} __attribute__((packed)) IDTEntry;  // 16 bytes per entry
+
+// IDT has 256 entries (0-255)
+IDTEntry idt[256];
+```
+
+**IDT Entry Flags (byte 5):**
+```
+Bit 7: Present (P) - Must be 1 for valid entry
+Bit 6-5: DPL - Descriptor Privilege Level (0 = kernel)
+Bit 4: 0 (always)
+Bit 3-0: Gate Type
+  - 0xE = 64-bit Interrupt Gate (clears IF flag)
+  - 0xF = 64-bit Trap Gate (doesn't clear IF flag)
+
+For interrupt handlers: flags = 0x8E (Present, DPL=0, Interrupt Gate)
+```
+
+#### PIC Remapping
+
+```c
+// src/kernel/i8259.c - Programmable Interrupt Controller setup
+
+void i8259_init() {
+    // Save current masks
+    unsigned char a1 = inb(PIC1_DATA);  // Port 0x21
+    unsigned char a2 = inb(PIC2_DATA);  // Port 0xA1
+    
+    // ICW1: Initialize + expect ICW4
+    outb(PIC1_COMMAND, 0x11);  // Port 0x20
+    io_wait();
+    outb(PIC2_COMMAND, 0x11);  // Port 0xA0
+    io_wait();
+    
+    // ICW2: Vector offsets
+    outb(PIC1_DATA, 0x20);     // Master PIC: IRQs 0-7 → INT 0x20-0x27
+    io_wait();
+    outb(PIC2_DATA, 0x28);     // Slave PIC: IRQs 8-15 → INT 0x28-0x2F
+    io_wait();
+    
+    // ICW3: Cascade configuration
+    outb(PIC1_DATA, 0x04);     // Master: slave on IRQ2 (bit 2)
+    io_wait();
+    outb(PIC2_DATA, 0x02);     // Slave: cascade identity (IRQ2)
+    io_wait();
+    
+    // ICW4: 8086 mode
+    outb(PIC1_DATA, 0x01);
+    io_wait();
+    outb(PIC2_DATA, 0x01);
+    io_wait();
+    
+    // Restore masks
+    outb(PIC1_DATA, a1);
+    outb(PIC2_DATA, a2);
+}
+```
+
+**Why remap?**
+- Default PIC maps IRQ 0-7 to INT 0x08-0x0F
+- Intel reserved INT 0x00-0x1F for CPU exceptions
+- Conflict: IRQ 0 (timer) would clash with #DF (Double Fault)
+- Solution: Remap to 0x20+ to avoid conflicts
+
+### Keyboard Driver Implementation
+
+```c
+// src/kernel/keyboard.c
+
+// US QWERTY scancode set 1 to ASCII mapping
+static const char scancode_to_ascii[] = {
+    0,    0,    '1', '2', '3', '4', '5', '6', '7', '8', '9', '0', '-',  '=',
+    '\b', '\t', 'q', 'w', 'e', 'r', 't', 'y', 'u', 'i', 'o', 'p', '[',  ']',
+    '\n', 0,    'a', 's', 'd', 'f', 'g', 'h', 'j', 'k', 'l', ';', '\'', '`',
+    // ... continues for all keys
+};
+
+// Keyboard interrupt handler (IRQ 1 = INT 0x21)
+void keyboard_handler(Registers *regs) {
+    uint8_t scancode = inb(0x60);   // Read scancode from keyboard data port
+    
+    // Key release: bit 7 is set
+    if (scancode & 0x80) {
+        scancode &= 0x7F;           // Clear release bit
+        if (scancode == 0x2A || scancode == 0x36) {  // Left/Right Shift
+            shift_pressed = 0;
+        }
+        return;
+    }
+    
+    // Key press
+    if (scancode == 0x2A || scancode == 0x36) {  // Shift keys
+        shift_pressed = 1;
+        return;
+    }
+    
+    // Convert scancode to ASCII
+    char c = shift_pressed ? scancode_to_ascii_shift[scancode]
+                           : scancode_to_ascii[scancode];
+    
+    if (c != 0) {
+        key_buffer_push(c);    // Add to circular buffer
+        shell_putchar(c);      // Echo to shell
+    }
+}
+
+// Register handler during init
+void keyboard_init(void) {
+    register_interrupt_handler(33, keyboard_handler);  // IRQ 1 → INT 0x21
+}
+```
+
+**Keyboard I/O Ports:**
+- Port 0x60: Data port (read scancodes)
+- Port 0x64: Status/command port
+  - Reading: bit 0 = output buffer full (data ready)
+  - Writing: send commands to keyboard controller
+
+### VGA Text Mode Implementation
+
+```c
+// src/kernel/main.c - Direct VGA memory access
+
+#define VGA_WIDTH 80
+#define VGA_HEIGHT 25
+#define VGA_MEMORY 0xB8000
+
+// VGA text buffer: 80×25 characters, 2 bytes each
+// Byte 0: ASCII character
+// Byte 1: Attribute (foreground 4 bits | background 4 bits)
+static volatile uint8_t *video_memory = (volatile uint8_t *)VGA_MEMORY;
+
+void putchar_at(char c, uint8_t color, int col, int row) {
+    int offset = (row * VGA_WIDTH + col) * 2;
+    video_memory[offset] = c;           // Character
+    video_memory[offset + 1] = color;   // Attribute
+}
+
+void scroll_screen(void) {
+    // Copy lines 1-24 to lines 0-23
+    for (int row = 1; row < VGA_HEIGHT; row++) {
+        for (int col = 0; col < VGA_WIDTH * 2; col++) {
+            int src = (row * VGA_WIDTH * 2) + col;
+            int dst = ((row - 1) * VGA_WIDTH * 2) + col;
+            video_memory[dst] = video_memory[src];
+        }
+    }
+    
+    // Clear last line
+    for (int col = 0; col < VGA_WIDTH; col++) {
+        int offset = (VGA_HEIGHT - 1) * VGA_WIDTH * 2 + col * 2;
+        video_memory[offset] = ' ';
+        video_memory[offset + 1] = 0x07;  // Light gray on black
+    }
+}
+```
+
+**VGA Color Attributes:**
+```
+Bit 7: Blink (or bright background if disabled)
+Bits 6-4: Background color (0-7)
+Bit 3: Bright foreground
+Bits 2-0: Foreground color (0-7)
+
+Colors:
+0 = Black    4 = Red
+1 = Blue     5 = Magenta
+2 = Green    6 = Brown
+3 = Cyan     7 = Light Gray
+
+Example: 0x1F = White on Blue (0001 1111)
+         0x4E = Yellow on Red (0100 1110)
+```
+
+### FAT12 Implementation Details
+
+```c
+// src/bootloader/stage2/fat.c
+
+// FAT12 cluster chain reading
+uint32_t FAT_NextCluster(uint32_t currentCluster) {
+    // FAT12: 12 bits per entry, packed into bytes
+    // Entry at byte offset (cluster × 3 / 2)
+    
+    uint32_t fatIndex = currentCluster * 3 / 2;
+    
+    if (currentCluster % 2 == 0) {
+        // Even cluster: take low 12 bits
+        return (*(uint16_t *)(g_Fat + fatIndex)) & 0x0FFF;
+    } else {
+        // Odd cluster: take high 12 bits (shift right 4)
+        return (*(uint16_t *)(g_Fat + fatIndex)) >> 4;
+    }
+}
+
+// Convert cluster number to LBA (sector address)
+uint32_t FAT_ClusterToLba(uint32_t cluster) {
+    // Data area starts after: reserved + FATs + root directory
+    // First data cluster is #2 (clusters 0 and 1 are reserved)
+    return g_DataSectionLba + (cluster - 2) * g_Data->BS.BootSector.SectorsPerCluster;
+}
+```
+
+**FAT12 Disk Layout:**
+```
+Sector 0:     Boot sector (with BPB)
+Sectors 1-9:  FAT #1 (9 sectors × 512 bytes = 4608 bytes)
+Sectors 10-18: FAT #2 (backup copy)
+Sectors 19-32: Root directory (14 sectors × 512 = 7168 bytes = 224 entries)
+Sectors 33+:  Data area (file contents)
+
+Cluster → Sector formula:
+  LBA = 33 + (cluster - 2) × 1
+      = 33 + cluster - 2
+      = 31 + cluster
+```
+
+### Shell Implementation
+
+```c
+// src/kernel/shell.c - Interactive command shell
+
+void execute_command(void) {
+    // Parse command and arguments
+    char *cmd = input_buffer;
+    char *args = input_buffer;
+    
+    // Find first space (separates command from arguments)
+    while (*args && *args != ' ') args++;
+    if (*args) {
+        *args = '\0';  // Null-terminate command
+        args++;        // Point to arguments
+        while (*args == ' ') args++;  // Skip leading spaces
+    }
+    
+    // Command dispatch
+    if (strcmp(cmd, "help") == 0) {
+        cmd_help();
+    } else if (strcmp(cmd, "clear") == 0) {
+        clear_screen(0x07);
+    } else if (strcmp(cmd, "reboot") == 0) {
+        // Triple-fault to reboot
+        outb(0x64, 0xFE);  // Pulse CPU reset line via keyboard controller
+    } else if (strcmp(cmd, "peek") == 0) {
+        // Memory inspection: peek <hex_address>
+        uint64_t addr = atoi_hex(args);
+        uint8_t *ptr = (uint8_t *)addr;
+        // Print 16 bytes at address
+        for (int i = 0; i < 16; i++) {
+            print_hex_byte(ptr[i]);
+        }
+    }
+    // ... more commands ...
+}
+```
+
+---
+
 ## Future Enhancement Ideas
 
 **Short term (next steps):**
@@ -5962,6 +6682,18 @@ Happy OS development! 🚀
 *Current binary size: Stage 1: 512 bytes | Stage 2: ~2KB | Kernel: ~2 KB*
 
 ## Changelog
+
+### Version 1.0.2 (2025-12-01)
+- **Added**: New "Implementation Deep-Dive: Code Walkthrough" section with granular, line-by-line code explanations
+- **Added**: Detailed Stage 1 bootloader code analysis with FAT12 BPB structure breakdown
+- **Added**: Complete FAT12 cluster chain following explanation with bit manipulation examples
+- **Added**: Stage 2 C/Assembly integration patterns with Open Watcom calling conventions
+- **Added**: 64-bit Long Mode transition walkthrough with page table setup details
+- **Added**: PIC remapping implementation explanation with I/O port details
+- **Added**: Keyboard driver scancode mapping and interrupt handler implementation
+- **Added**: VGA text mode direct memory access patterns
+- **Added**: Shell command parsing implementation details
+- **Updated**: Table of Contents to include new deep-dive sections
 
 ### Version 1.0.1 (2025-12-01)
 - **Fixed**: Removed duplicate sections in README (Learning Resources, License, Acknowledgments)
