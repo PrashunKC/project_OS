@@ -41,9 +41,6 @@ extern void isr29();
 extern void isr30();
 extern void isr31();
 
-// Syscall interrupt
-extern void isr128();
-
 // External assembly IRQ handlers
 extern void irq0();
 extern void irq1();
@@ -117,10 +114,6 @@ void isr_init() {
   idt_set_gate(45, (uint64_t)irq13, 0x08, 0x8E);
   idt_set_gate(46, (uint64_t)irq14, 0x08, 0x8E);
   idt_set_gate(47, (uint64_t)irq15, 0x08, 0x8E);
-
-  // Syscall interrupt (INT 0x80) - DPL=3 so user mode can call it
-  // 0xEE = Present, DPL=3, 64-bit Interrupt Gate
-  idt_set_gate(0x80, (uint64_t)isr128, 0x08, 0xEE);
 }
 
 void register_interrupt_handler(uint8_t n, ISRHandler handler) {
