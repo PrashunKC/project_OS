@@ -1,3 +1,4 @@
+; Partition volume boot record that locates and loads the next boot stage.
 org 0x7C00
 bits 16
 

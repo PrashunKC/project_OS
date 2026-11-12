@@ -1,8 +1,7 @@
 #pragma once
 #include "stdint.h"
 
-// VESA VBE Structures
-
+// Packed structures returned by VESA BIOS Extensions (VBE) calls.
 
 // VBE Info Block (INT 10h, AX=4F00h)
 typedef struct 
@@ -69,7 +68,7 @@ typedef struct
 } __attribute__((packed)) VESAModeInfo;
 
 
-// Framebuffer info to pass to kernel
+// Framebuffer information copied to the fixed bootloader/kernel handoff area.
 typedef struct 
 {
   uint32_t framebuffer_addr;
@@ -87,7 +86,11 @@ typedef struct
 } __attribute__((packed)) FramebufferInfo;
 
 
-// Function prototypes
+// Discover a usable VESA mode and populate the shared framebuffer structure.
 int vesa_init(void);
+
+// Set a VBE mode with a linear framebuffer.
 int vesa_set_mode(uint16_t mode);
+
+// Return the stage2-owned framebuffer handoff structure.
 FramebufferInfo *vesa_get_framebuffer_info(void);

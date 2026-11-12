@@ -1,3 +1,4 @@
+// VGA text-mode hardware cursor control.
 
 #include "vga.h"
 #include "stdint.h"

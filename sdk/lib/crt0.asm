@@ -1,6 +1,7 @@
 ; NBOS C Runtime Startup
 ; This is the entry point for NBOS programs
 
+; Minimal application startup object for the NBOS SDK.
 bits 64
 section .text
 

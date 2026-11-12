@@ -1,3 +1,4 @@
+// VBE discovery and mode selection, including the kernel framebuffer handoff.
 #include "vesa.h"
 #include "memory.h"
 #include "stdio.h"

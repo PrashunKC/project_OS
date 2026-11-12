@@ -1,3 +1,4 @@
+// 8259A programmable interrupt controller initialization and acknowledgements.
 #include "i8259.h"
 
 // Helper functions to read/write ports (inline assembly)

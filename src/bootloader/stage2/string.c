@@ -1,3 +1,4 @@
+// Null-terminated string helpers for the freestanding stage2 environment.
 #include "string.h"
 #include "stdint.h"
 

@@ -1,12 +1,12 @@
 #pragma once
 #include "stdint.h"
 
-// Initialize and run the shell
+// Reset shell input state, then run the interactive shell loop.
 void shell_init(void);
 void shell_run(void);
 
-// Handle character input from keyboard
+// Insert a translated keyboard character into the current command line.
 void shell_putchar(char c);
 
-// Handle arrow keys
+// Handle supported set-1 arrow-key scancodes.
 void shell_handle_arrow(uint8_t scancode);

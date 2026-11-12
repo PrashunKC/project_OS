@@ -1,3 +1,4 @@
+// Active interrupt descriptor table storage and gate initialization.
 #include "idt.h"
 
 // Declare the IDT and pointer

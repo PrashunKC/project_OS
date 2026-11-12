@@ -1,3 +1,4 @@
+// Stage2 orchestration: initialize storage, load the kernel, and transfer control.
 #include "disk.h"
 #include "fat.h"
 #include "memory.h"

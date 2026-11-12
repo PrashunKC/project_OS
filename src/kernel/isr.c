@@ -1,3 +1,4 @@
+// Exception and IRQ gate registration, dispatch, and PIC acknowledgement.
 #include "isr.h"
 #include "i8259.h"
 #include "idt.h"

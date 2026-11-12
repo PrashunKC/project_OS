@@ -1,5 +1,6 @@
 [bits 64]
 
+; Common exception/IRQ stubs that build the Registers frame for C dispatch.
 ; Defined in idt.c
 extern idt_ptr
 

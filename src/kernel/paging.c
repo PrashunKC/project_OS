@@ -1,3 +1,4 @@
+// Paging compatibility hooks and control-register readers.
 #include "paging.h"
 #include "stdint.h"
 

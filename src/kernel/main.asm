@@ -1,3 +1,4 @@
+; Legacy stage2 real-mode entry retained for the original boot path.
 org 0x0
 bits 16
 

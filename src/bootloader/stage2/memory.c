@@ -1,3 +1,4 @@
+// Small byte-oriented memory routines used before a C runtime exists.
 #include "memory.h"
 
 void *memcpy(void *dst, const void *src, uint16_t num)

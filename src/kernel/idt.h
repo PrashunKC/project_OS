@@ -1,7 +1,7 @@
 #pragma once
 #include "stdint.h"
 
-// 64-bit IDT Entry structure
+// 64-bit interrupt gate descriptor used by the active IDT.
 typedef struct
 {
     uint16_t base_low;     // Lower 16 bits of handler address
@@ -13,15 +13,15 @@ typedef struct
     uint32_t reserved;     // Reserved, must be 0
 } __attribute__((packed)) IDTEntry;
 
-// IDT Pointer structure (64-bit)
+// Operand consumed by the lidt instruction.
 typedef struct
 {
     uint16_t limit;
     uint64_t base;
 } __attribute__((packed)) IDTPtr;
 
-// Initialize the IDT
+// Clear the 256-entry IDT and load it with the assembly helper.
 void idt_init();
 
-// Set an entry in the IDT
+// Install one interrupt gate at num.
 void idt_set_gate(int num, uint64_t base, uint16_t sel, uint8_t flags);

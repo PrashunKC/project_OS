@@ -1,5 +1,6 @@
 #pragma once
 
+// Conventional-memory bounds and reserved FAT workspace used by stage2.
 #define MEMORY_MIN      0x00000500
 #define MEMORY_MAX      0x00080000
 

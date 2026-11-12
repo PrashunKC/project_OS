@@ -1,3 +1,4 @@
+// Interactive kernel shell, line editor, and diagnostic commands.
 #include "shell.h"
 #include "paging.h"
 #include "stdint.h"

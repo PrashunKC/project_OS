@@ -1,3 +1,4 @@
+; Legacy floppy boot-sector implementation for the original single-stage path.
 org 0x7C00
 bits 16
 

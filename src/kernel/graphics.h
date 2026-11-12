@@ -1,7 +1,7 @@
 #pragma once
 #include "stdint.h"
 
-// Framebuffer info structure (matches bootloader's FramebufferInfo)
+// Packed framebuffer handoff structure; layout must match stage2/vesa.h.
 typedef struct {
   uint32_t framebuffer_addr;
   uint32_t width;
@@ -17,16 +17,16 @@ typedef struct {
   uint8_t blue_field_pos;
 } __attribute__((packed)) FramebufferInfo;
 
-// Initialize graphics system from bootloader's framebuffer info
+// Read the handoff structure at 0x8000 and enable graphics when valid.
 void graphics_init(void);
 
-// Check if we're in graphics mode
+// Return nonzero when a supported framebuffer is available.
 int graphics_is_available(void);
 
-// Get framebuffer info
+// Return the current framebuffer metadata.
 FramebufferInfo *graphics_get_info(void);
 
-// Basic drawing primitives
+// Pixel and shape primitives. Coordinates outside the framebuffer are ignored.
 void graphics_clear(uint32_t color);
 void graphics_put_pixel(int x, int y, uint32_t color);
 uint32_t graphics_get_pixel(int x, int y);
@@ -36,13 +36,13 @@ void graphics_draw_line(int x0, int y0, int x1, int y1, uint32_t color);
 void graphics_draw_circle(int cx, int cy, int radius, uint32_t color);
 void graphics_fill_circle(int cx, int cy, int radius, uint32_t color);
 
-// Text rendering (simple built-in font)
+// Render ASCII text using the built-in 8x16 font.
 void graphics_draw_char(int x, int y, char c, uint32_t fg, uint32_t bg);
 void graphics_draw_string(int x, int y, const char *str, uint32_t fg, uint32_t bg);
 int graphics_get_font_width(void);
 int graphics_get_font_height(void);
 
-// Color helpers
+// Pack 8-bit RGB or RGBA components into a 32-bit color value.
 #define RGB(r, g, b) (((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
 #define RGBA(r, g, b, a) (((uint32_t)(a) << 24) | ((uint32_t)(r) << 16) | ((uint32_t)(g) << 8) | (uint32_t)(b))
 

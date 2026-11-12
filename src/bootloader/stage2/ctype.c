@@ -1,3 +1,4 @@
+// ASCII character classification and case conversion for the freestanding loader.
 #include "ctype.h"
 
 bool isLower(char chr)

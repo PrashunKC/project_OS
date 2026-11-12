@@ -1,3 +1,4 @@
+// BIOS-backed disk geometry, LBA conversion, and retrying sector reads.
 #include "disk.h"
 #include "x86.h"
 

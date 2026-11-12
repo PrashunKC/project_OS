@@ -1,3 +1,4 @@
+// Framebuffer graphics primitives and the built-in 8x16 ASCII renderer.
 #include "graphics.h"
 
 // Address where bootloader stores framebuffer info

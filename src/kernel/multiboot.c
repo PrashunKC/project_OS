@@ -1,3 +1,4 @@
+// Optional GRUB Multiboot framebuffer metadata parser.
 #include "multiboot.h"
 #include "stdint.h"
 

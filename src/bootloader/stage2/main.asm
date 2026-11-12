@@ -1,3 +1,4 @@
+; Stage2 entry glue: preserve the boot drive, run real-mode VESA setup, and call C.
 bits 16
 
 section .entry

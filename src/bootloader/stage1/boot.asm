@@ -1,3 +1,4 @@
+; FAT12 stage1 loader: locate STAGE2.BIN and load its cluster chain in real mode.
 org 0x7C00
 bits 16
 

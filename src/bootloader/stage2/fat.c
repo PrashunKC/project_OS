@@ -1,3 +1,4 @@
+// Minimal FAT12/16-style reader used to locate and load the kernel file.
 #include "fat.h"
 #include "stdio.h"
 #include "memdefs.h"

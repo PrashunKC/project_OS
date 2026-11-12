@@ -1,149 +1,84 @@
 # NBOS Software Development Kit
 
-Welcome to the NBOS SDK! This toolkit allows you to write programs for NBOS from your Linux development machine.
+The SDK contains the freestanding headers, startup object, compiler wrapper,
+and example programs intended for NBOS applications.
 
-## Requirements
+## Status and scope
 
-- GCC cross-compiler for x86_64-elf (or regular gcc with -m64)
-- NASM assembler
-- Make
+The public headers define an application-facing ABI based on `int 0x80`
+syscalls and a BGI-style graphics API. The current repository does not yet
+provide a complete user-mode loader or matching kernel implementation for
+every declared syscall, so the SDK is an interface and example foundation,
+not a self-contained application runtime.
 
-## Quick Start
+## Layout
+
+| Path | Purpose |
+| --- | --- |
+| `include/nbos.h` | Syscall numbers, wrappers, memory, strings, console, and control APIs |
+| `include/graphics.h` | Header-only BGI-compatible drawing helpers |
+| `include/stdint.h` | Fixed-width integer types and limits |
+| `lib/crt0.asm` | Application entry/startup object |
+| `tools/nbos-gcc` | Compiler and linker wrapper |
+| `tools/nbos.mk` | Shared Make definitions |
+| `examples/hello` | Minimal console example |
+| `examples/graphics` | Drawing API example |
+| `examples/game` | Pong-style input/graphics example |
+
+## Setup and build
 
 ```bash
-# Set up the SDK environment
 source sdk/env.sh
-
-# Build an example
 cd sdk/examples/hello
 make
-
-# The resulting .bin file can be loaded by NBOS
 ```
 
-## Directory Structure
+`env.sh` exports `NBOS_SDK`, `NBOS_INCLUDE`, and `NBOS_LIB`, and puts
+`nbos-gcc` on `PATH`. The wrapper prefers `x86_64-elf-gcc`/`ld` and falls
+back to the host `gcc`/`ld`.
 
-```
-sdk/
-├── include/          # NBOS headers
-│   ├── nbos.h        # Main NBOS API
-│   ├── graphics.h    # Graphics functions (BGI-compatible)
-│   ├── stdint.h      # Integer types
-│   └── string.h      # String functions
-├── lib/              # Runtime libraries
-│   └── crt0.o        # C runtime startup
-├── examples/         # Example programs
-│   ├── hello/        # Hello World
-│   ├── graphics/     # Graphics demo
-│   └── game/         # Simple game
-├── tools/            # Build tools
-│   ├── nbos-gcc      # Wrapper script for compiling
-│   └── nbos-ld       # Wrapper script for linking
-├── env.sh            # Environment setup script
-└── README.md         # This file
-```
+The wrapper compiles with freestanding 64-bit flags, disables the red zone
+and SIMD instructions, links without the host C library, and uses `crt0.o`
+when it exists. `make clean` removes generated binaries and object files in
+each example directory.
 
-## API Reference
+## Syscall interface
 
-### Graphics Functions (graphics.h)
+The syscall number constants are declared in `include/nbos.h`:
 
-```c
-// Initialize graphics mode
-void initgraph(int *gd, int *gm, const char *path);
+| Number | Name | Purpose |
+| ---: | --- | --- |
+| 0 | `SYS_EXIT` | Terminate the application |
+| 1 | `SYS_PRINT` | Console output |
+| 2 | `SYS_GETKEY` | Blocking key input |
+| 3 | `SYS_KBHIT` | Test for key input |
+| 4-5 | `SYS_MALLOC`, `SYS_FREE` | Heap allocation |
+| 6 | `SYS_SLEEP` | Millisecond delay |
+| 10-14 | `SYS_PUTPIXEL` through `SYS_GETHEIGHT` | Graphics and screen queries |
 
-// Close graphics mode  
-void closegraph(void);
+The wrappers place the syscall number in `RAX` and arguments in the registers
+required by the wrapper arity, then issue `int $0x80`. Kernel-side syscall
+dispatch must preserve this contract.
 
-// Drawing primitives
-void putpixel(int x, int y, int color);
-void line(int x1, int y1, int x2, int y2);
-void rectangle(int left, int top, int right, int bottom);
-void circle(int x, int y, int radius);
-void bar(int left, int top, int right, int bottom);
+## Graphics API
 
-// Colors
-void setcolor(int color);
-void setbkcolor(int color);
-void setfillstyle(int pattern, int color);
+`graphics.h` keeps drawing state in header-local `static` variables and
+implements primitives inline. `initgraph` obtains the screen dimensions from
+the kernel, `setcolor`/`setbkcolor` update state, and drawing functions issue
+pixel syscalls. BGI palette values are converted to packed RGB values.
 
-// Text
-void outtextxy(int x, int y, const char *text);
+Some compatibility functions are intentionally simplified: `arc` currently
+draws a complete circle, and viewport clipping is state-only. Treat these
+as documented compatibility shims rather than full BGI implementations.
 
-// Screen info
-int getmaxx(void);
-int getmaxy(void);
-```
+## Examples
 
-### System Functions (nbos.h)
-
-```c
-// Memory
-void *malloc(size_t size);
-void free(void *ptr);
-
-// I/O
-void print(const char *str);
-char getkey(void);
-int kbhit(void);
-
-// System
-void exit(int code);
-void sleep(int ms);
-```
-
-## Building Your Program
-
-Create a simple program:
-
-```c
-// myprogram.c
-#include <nbos.h>
-#include <graphics.h>
-
-int main(void) {
-    int gd = DETECT, gm;
-    initgraph(&gd, &gm, "");
-    
-    setcolor(WHITE);
-    outtextxy(100, 100, "Hello from NBOS!");
-    
-    circle(320, 240, 50);
-    
-    getkey();  // Wait for keypress
-    closegraph();
-    return 0;
-}
-```
-
-Compile it:
+Each example has its own Makefile and includes `tools/nbos.mk`:
 
 ```bash
-nbos-gcc -o myprogram.bin myprogram.c
+cd sdk/examples/graphics
+make
 ```
 
-## Colors
-
-Standard BGI colors are supported:
-
-| Value | Color        |
-|-------|--------------|
-| 0     | BLACK        |
-| 1     | BLUE         |
-| 2     | GREEN        |
-| 3     | CYAN         |
-| 4     | RED          |
-| 5     | MAGENTA      |
-| 6     | BROWN        |
-| 7     | LIGHTGRAY    |
-| 8     | DARKGRAY     |
-| 9     | LIGHTBLUE    |
-| 10    | LIGHTGREEN   |
-| 11    | LIGHTCYAN    |
-| 12    | LIGHTRED     |
-| 13    | LIGHTMAGENTA |
-| 14    | YELLOW       |
-| 15    | WHITE        |
-
-## License
-
-MIT License - See LICENSE file
+The generated `.bin` files are application artifacts; they are not copied
+into the boot image by the default top-level build.

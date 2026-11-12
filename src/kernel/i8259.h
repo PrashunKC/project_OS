@@ -8,6 +8,11 @@
 
 #define PIC_EOI 0x20
 
+// Remap the master/slave PIC vectors to IRQ32-47.
 void i8259_init();
+
+// Acknowledge an interrupt on the master, and optionally the slave, PIC.
 void i8259_send_eoi(int pic);
+
+// Mask all IRQ lines on both PICs.
 void i8259_disable();

@@ -1,3 +1,4 @@
+// Interrupt-driven PS/2 keyboard input with set-1 scancode translation.
 #include "keyboard.h"
 #include "isr.h"
 #include "shell.h"

@@ -1,3 +1,4 @@
+; CPU capability checks and page-table/GDT setup for entering long mode.
 global long_mode_start
 extern start
 

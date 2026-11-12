@@ -1,3 +1,4 @@
+; 32-bit C-callable wrappers around BIOS disk, video, and INT 10h services.
 bits 32
 
 section .text

@@ -1,3 +1,4 @@
+// Formatted text output routed through BIOS teletype services.
 #include "stdio.h"
 #include "x86.h"
 #include <stdarg.h>

@@ -3,6 +3,7 @@
 #include "disk.h"
 #pragma pack(push, 1)
 
+// On-disk FAT directory entry. The 11-byte Name is an 8.3 name without a dot.
 typedef struct
 {
     uint8_t Name[11];
@@ -29,6 +30,7 @@ typedef struct
     uint32_t Size;
 }FAT_File;
 
+// Attribute bits stored in FAT directory entries.
 enum FAT_Attributes
 {
     FAT_ATTRIBUTE_READ_ONLY = 0x01,
@@ -40,9 +42,18 @@ enum FAT_Attributes
     FAT_ATTRIBUTE_LONG_NAME = FAT_ATTRIBUTE_READ_ONLY | FAT_ATTRIBUTE_HIDDEN | FAT_ATTRIBUTE_SYSTEM | FAT_ATTRIBUTE_VOLUME_ID
 };
 
+// Load the FAT boot sector, table, and root directory into stage2 memory.
 bool FAT_Initialize(DISK* disk);
+
+// Open a root-directory path and return a reusable file handle, or NULL.
 FAT_File* FAT_Open(DISK* disk, const char* path);
+
+// Read up to byteCCount bytes from the current file position.
 uint32_t FAT_Read(DISK* disk, FAT_File* file, uint32_t byteCCount, void* dataOut);
+
+// Read the next directory entry from an opened directory.
 bool FAT_ReadEntry(DISK* disk, FAT_File* file, FAT_DirectoryEntry* dirEntry);
+
+// Release a file handle allocated by FAT_Open.
 void FAT_Close(FAT_File* file);
 

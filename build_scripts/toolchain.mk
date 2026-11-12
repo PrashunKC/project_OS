@@ -1,5 +1,5 @@
-# Toolchain detection and setup for cross-compilation
-# Include this file in your main Makefile
+# Cross-toolchain detection shared by the top-level and stage2 Makefiles.
+# The active default target is i686-elf; host tools are used as a fallback.
 
 # Toolchain configuration
 TOOLCHAIN_DIR ?= $(HOME)/opt/cross

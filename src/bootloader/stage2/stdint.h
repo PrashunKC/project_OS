@@ -1,5 +1,6 @@
 #pragma once
 
+// Minimal fixed-width types used before the host C library is available.
 typedef signed char        int8_t;
 typedef unsigned char      uint8_t;
 typedef signed short       int16_t;

@@ -3,8 +3,7 @@
 
 #include "stdint.h"
 
-// 64-bit IDT Gate Descriptor (16 bytes)
-// Following Intel notation to match existing 32-bit code
+// 64-bit IDT gate descriptor (16 bytes), using Intel's field names.
 typedef struct {
   uint16_t base_low;  // Offset bits 0-15
   uint16_t selector;  // Code segment selector
@@ -15,21 +14,23 @@ typedef struct {
   uint32_t reserved;  // Reserved, must be 0
 } __attribute__((packed)) IDT64Entry;
 
-// IDT Pointer structure
+// Operand consumed by lidt.
 typedef struct {
   uint16_t limit; // Size of IDT - 1
   uint64_t base;  // Base address of IDT
 } __attribute__((packed)) IDT64Ptr;
 
-// Flag definitions
+// Gate flags: presence, privilege level, and gate type.
 #define IDT64_FLAG_PRESENT 0x80
 #define IDT64_FLAG_RING0 0x00
 #define IDT64_FLAG_RING3 0x60
 #define IDT64_FLAG_GATE_INT 0x0E  // 64-bit Interrupt Gate
 #define IDT64_FLAG_GATE_TRAP 0x0F // 64-bit Trap Gate
 
-// Function prototypes
+// Initialize and load the alternate 64-bit IDT implementation.
 void idt64_init(void);
+
+// Install one gate in the alternate IDT implementation.
 void idt64_set_gate(int n, uint64_t base, uint16_t selector, uint8_t flags);
 
 #endif // IDT64_H

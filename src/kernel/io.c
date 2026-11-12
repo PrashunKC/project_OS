@@ -1,3 +1,4 @@
+// Basic x86 port-I/O primitive used by kernel device drivers.
 #include "io.h"
 #include "stdint.h"
 

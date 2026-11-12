@@ -1,5 +1,6 @@
 bits 32
 
+; Multiboot entry path: establish identity paging and enter 64-bit kernel code.
 ; Multiboot constants
 MULTIBOOT_MAGIC        equ 0x1BADB002
 MULTIBOOT_PAGE_ALIGN   equ 1 << 0

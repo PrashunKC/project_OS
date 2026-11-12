@@ -1,3 +1,4 @@
+// Alternate 64-bit IDT implementation retained for long-mode experiments.
 #include "idt64.h"
 
 // IDT with 256 entries

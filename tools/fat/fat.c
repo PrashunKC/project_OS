@@ -1,3 +1,4 @@
+// Host-side FAT image reader used to inspect files in generated images.
 #include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>

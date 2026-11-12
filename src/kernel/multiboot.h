@@ -1,16 +1,16 @@
 #pragma once
 #include "stdint.h"
 
-// Multiboot header magic numbers
+// Multiboot protocol magic values supplied by the bootloader/GRUB.
 #define MULTIBOOT_HEADER_MAGIC 0x1BADB002
 #define MULTIBOOT_BOOTLOADER_MAGIC 0x2BADB002
 
-// Multiboot header flags
+// Flags describing fields present in multiboot_info_t.
 #define MULTIBOOT_PAGE_ALIGN 0x00000001
 #define MULTIBOOT_MEMORY_INFO 0x00000002
 #define MULTIBOOT_VIDEO_MODE 0x00000004
 
-// Multiboot info structure (passed by GRUB in EBX)
+// Packed Multiboot information block passed by GRUB in EBX.
 typedef struct {
   uint32_t flags;
   uint32_t mem_lower;
@@ -44,10 +44,10 @@ typedef struct {
   uint8_t color_info[6];
 } __attribute__((packed)) multiboot_info_t;
 
-// Function to parse Multiboot info
+// Parse framebuffer fields when magic identifies a Multiboot boot.
 void multiboot_init(uint32_t magic, multiboot_info_t *mbi);
 
-// Framebuffer getters
+// Return the framebuffer values cached by multiboot_init.
 uint32_t multiboot_get_framebuffer_addr(void);
 uint32_t multiboot_get_framebuffer_width(void);
 uint32_t multiboot_get_framebuffer_height(void);
