@@ -5,8 +5,8 @@
 set -e
 
 # Check for QEMU
-if ! command -v qemu-system-i386 &> /dev/null; then
-    echo "Error: qemu-system-i386 not found. Please install QEMU."
+if ! command -v qemu-system-x86_64 &> /dev/null; then
+    echo "Error: qemu-system-x86_64 not found. Please install QEMU."
     exit 1
 fi
 
@@ -28,4 +28,4 @@ unset GIO_MODULE_DIR
 unset GSETTINGS_SCHEMA_DIR
 
 echo "Starting QEMU..."
-qemu-system-i386 -fda build/main_floppy.img
+qemu-system-x86_64 -fda build/main_floppy.img

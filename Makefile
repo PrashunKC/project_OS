@@ -216,8 +216,8 @@ run-grub-vbox: grub-iso
 
 # Test Multiboot kernel with QEMU (direct kernel boot)
 qemu-test: kernel
-	qemu-system-i386 -kernel $(BUILD_DIR)/kernel.bin -serial stdio
+	qemu-system-x86_64 -kernel $(BUILD_DIR)/kernel.bin -serial stdio
 
 # Test GRUB ISO with QEMU
 qemu-grub: grub-iso
-	qemu-system-i386 -cdrom $(BUILD_DIR)/project_os.iso -serial stdio
+	qemu-system-x86_64 -cdrom $(BUILD_DIR)/project_os.iso -serial stdio

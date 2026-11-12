@@ -19,7 +19,7 @@ To build separately and boot a specific image:
 
 ```bash
 make floppy_image
-qemu-system-i386 -fda build/main_floppy.img
+qemu-system-x86_64 -fda build/main_floppy.img
 ```
 
 ## Build alternate images
@@ -39,6 +39,6 @@ target has completed successfully.
 
 - `nasm: No such file or directory`: install NASM before building assembly.
 - `mkfs.fat` or `mcopy` missing: install `dosfstools` and `mtools`.
-- `qemu-system-i386` missing: install QEMU's x86 system package.
+- `qemu-system-x86_64` missing: install QEMU's x86 system package.
 - Cross-toolchain errors: run `make toolchain-info`; remember that the kernel
   currently selects host x86-64 GCC/LD explicitly.

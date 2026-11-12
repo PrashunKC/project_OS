@@ -3,8 +3,13 @@
 #include "x86.h"
 #include <stdarg.h>
 
+#define VESA_AVAILABLE_ADDR 0x80FF
+
 void putc(char c)
 {
+    // BIOS teletype output is unsafe after stage2 switches to VBE graphics.
+    if (*(volatile uint8_t *)VESA_AVAILABLE_ADDR)
+        return;
     x86_Video_WriteCharTeletype(c, 0);
 }
 

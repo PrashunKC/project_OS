@@ -109,9 +109,9 @@ echo "========================================"
 echo ""
 
 # Check for QEMU
-if command -v qemu-system-i386 >/dev/null 2>&1; then
+if command -v qemu-system-x86_64 >/dev/null 2>&1; then
     echo "✓ QEMU found"
-    qemu-system-i386 --version | head -n1
+    qemu-system-x86_64 --version | head -n1
 else
     echo "⚠ QEMU not found (optional)"
     echo "  Install with: sudo apt-get install qemu-system-x86"

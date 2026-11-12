@@ -150,9 +150,7 @@ void _cdecl cstart_(uint16_t bootDrive) {
   // Create a minimal Multiboot info structure (zeroed out for now)
   static uint32_t multiboot_info[32] = {0};
 
-  // Use inline assembly with explicit immediate moves
-  // This bypasses any compiler register allocation issues
-  // Jump to _start which is 16 bytes after kernel start (past multiboot header + alignment)
+  // Pass the values expected by the kernel's 32-bit entry stub.
   uint32_t entryPoint = (uint32_t)kernelStart + 16;
   __asm__ volatile("movl $0x2BADB002, %%eax\n" // Multiboot magic
                    "movl %0, %%ebx\n"          // Multiboot info

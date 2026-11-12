@@ -8,8 +8,11 @@ sets up the initial execution state and calls `start64` in `main.c`.
 `start64` initializes the framebuffer and Multiboot metadata, creates and
 loads the interrupt descriptor table, registers exception/IRQ stubs, remaps
 the 8259 PIC, enables interrupts, and registers the PS/2 keyboard handler.
-The graphical welcome screen is shown when stage2 supplied a valid framebuffer;
-the kernel then initializes the VGA text console and starts the shell.
+The graphical welcome screen is shown when stage2 supplies a valid framebuffer.
+After a keypress, the shell uses that framebuffer when VGA mode cannot be
+restored; otherwise it uses the VGA text console.
+Keyboard and shell state are explicitly reset on warm boots so stale
+scancodes cannot skip the welcome screen or contaminate the first command.
 
 ## Modules
 

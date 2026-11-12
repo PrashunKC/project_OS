@@ -13,6 +13,10 @@ material. The repository's actual build graph is defined by the root
 - `setup_toolchain.sh` downloads and builds the configured `i686-elf`
   binutils/GCC pair. It may also install/configure VirtualBox and therefore
   should be reviewed before running with elevated privileges.
+  Debian systems should have `pkg-config` installed; the script also falls
+  back to linker probes when package metadata is unavailable.
+  Its prerequisite check also covers NASM, `mkfs.fat`, and `mcopy`, which are
+  required by the default floppy-image build.
 - `QUICK_REFERENCE.md`, `SUMMARY.md`, and `USAGE_EXAMPLES.md` are command
   references for the current targets and should be read alongside the root
   Makefile.

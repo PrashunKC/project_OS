@@ -155,6 +155,17 @@ void keyboard_handler(Registers *regs) {
 }
 
 void keyboard_init(void) {
+  // Warm reboots can preserve pending scancodes and driver state.
+  shift_pressed = 0;
+  caps_lock = 0;
+  key_buffer_head = 0;
+  key_buffer_tail = 0;
+  for (int i = 0; i < KEY_BUFFER_SIZE; i++)
+    key_buffer[i] = 0;
+
+  while (inb(KEYBOARD_STATUS_PORT) & 0x01)
+    (void)inb(KEYBOARD_DATA_PORT);
+
   // Register keyboard interrupt handler (IRQ 1 = interrupt 33)
   register_interrupt_handler(33, keyboard_handler);
 }

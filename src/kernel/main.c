@@ -39,6 +39,22 @@ static int cursor_row = 0;
 static int cursor_col = 0;
 static volatile uint8_t *video_memory = (volatile uint8_t *)VGA_MEMORY;
 
+static int console_width(void) {
+  if (graphics_is_available()) {
+    FramebufferInfo *fb = graphics_get_info();
+    return fb->width / 8;
+  }
+  return VGA_WIDTH;
+}
+
+static int console_height(void) {
+  if (graphics_is_available()) {
+    FramebufferInfo *fb = graphics_get_info();
+    return fb->height / 16;
+  }
+  return VGA_HEIGHT;
+}
+
 // Cursor accessors for shell
 int get_cursor_row(void) { return cursor_row; }
 int get_cursor_col(void) { return cursor_col; }
@@ -48,8 +64,17 @@ static inline void outb(uint16_t port, uint8_t val) {
   __asm__ volatile("outb %0, %1" : : "a"(val), "Nd"(port));
 }
 
+static inline uint8_t inb(uint16_t port) {
+  uint8_t value;
+  __asm__ volatile("inb %1, %0" : "=a"(value) : "Nd"(port));
+  return value;
+}
+
 // Update hardware cursor position
 void update_cursor(void) {
+  if (graphics_is_available())
+    return;
+
   uint16_t pos = cursor_row * VGA_WIDTH + cursor_col;
   outb(0x3D4, 0x0F);
   outb(0x3D5, (uint8_t)(pos & 0xFF));
@@ -69,6 +94,23 @@ void set_cursor_col(int col) {
 
 // Scroll the screen content up by one line
 void scroll_screen(void) {
+  if (graphics_is_available()) {
+    FramebufferInfo *fb = graphics_get_info();
+    for (uint32_t y = 16; y < fb->height; y++) {
+      for (uint32_t x = 0; x < fb->width; x++) {
+        graphics_put_pixel((int)x, (int)(y - 16),
+                           graphics_get_pixel((int)x, (int)y));
+      }
+    }
+    for (uint32_t y = fb->height - 16; y < fb->height; y++) {
+      for (uint32_t x = 0; x < fb->width; x++)
+        graphics_put_pixel((int)x, (int)y, COLOR_BLACK);
+    }
+    cursor_row = console_height() - 1;
+    cursor_col = 0;
+    return;
+  }
+
   // Copy all lines up by one
   for (int row = 1; row < VGA_HEIGHT; row++) {
     for (int col = 0; col < VGA_WIDTH * 2; col++) {
@@ -89,6 +131,14 @@ void scroll_screen(void) {
 
 // Clear the screen with specified color
 void clear_screen(uint8_t color) {
+  if (graphics_is_available()) {
+    (void)color;
+    graphics_clear(COLOR_BLACK);
+    cursor_row = 0;
+    cursor_col = 0;
+    return;
+  }
+
   for (int i = 0; i < VGA_WIDTH * VGA_HEIGHT * 2; i += 2) {
     video_memory[i] = ' ';
     video_memory[i + 1] = color;
@@ -99,6 +149,12 @@ void clear_screen(uint8_t color) {
 
 // Print a character at current cursor position
 void putchar_at(char c, uint8_t color, int col, int row) {
+  if (graphics_is_available()) {
+    (void)color;
+    graphics_draw_char(col * 8, row * 16, c, COLOR_WHITE, COLOR_BLACK);
+    return;
+  }
+
   int offset = (row * VGA_WIDTH + col) * 2;
   video_memory[offset] = c;
   video_memory[offset + 1] = color;
@@ -120,16 +176,16 @@ void kputc(char c, uint8_t color) {
   } else {
     putchar_at(c, color, cursor_col, cursor_row);
     cursor_col++;
-    if (cursor_col >= VGA_WIDTH) {
+    if (cursor_col >= console_width()) {
       cursor_col = 0;
       cursor_row++;
     }
   }
 
   // Scroll screen if we've reached the bottom
-  if (cursor_row >= VGA_HEIGHT) {
+  if (cursor_row >= console_height()) {
     scroll_screen();
-    cursor_row = VGA_HEIGHT - 1;
+    cursor_row = console_height() - 1;
   }
   // Update hardware cursor
   update_cursor();
@@ -148,10 +204,51 @@ void knewline(void) {
   cursor_col = 0;
   cursor_row++;
   // Scroll screen if we've reached the bottom
-  if (cursor_row >= VGA_HEIGHT) {
+  if (cursor_row >= console_height()) {
     scroll_screen();
-    cursor_row = VGA_HEIGHT - 1;
+    cursor_row = console_height() - 1;
   }
+}
+
+// Restore VGA mode 03h so the existing text shell is visible after the
+// graphical welcome screen.
+static void restore_vga_text_mode(void) {
+  static const uint8_t sequencer[] = {0x03, 0x00, 0x03, 0x00, 0x02};
+  static const uint8_t crtc[] = {
+      0x5F, 0x4F, 0x50, 0x82, 0x55, 0x81, 0xBF, 0x1F, 0x00, 0x4F,
+      0x0D, 0x0E, 0x00, 0x00, 0x00, 0x00, 0x9C, 0x8E, 0x8F, 0x28,
+      0x1F, 0x96, 0xB9, 0xA3, 0xFF};
+  static const uint8_t graphics_controller[] = {
+      0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x0E, 0x00, 0xFF};
+  static const uint8_t attribute_controller[] = {
+      0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+      0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+      0x0C, 0x00, 0x0F, 0x08, 0x00};
+
+  outb(0x3C2, 0x67);
+  for (uint8_t index = 0; index < sizeof(sequencer); index++) {
+    outb(0x3C4, index);
+    outb(0x3C5, sequencer[index]);
+  }
+
+  outb(0x3D4, 0x11);
+  outb(0x3D5, 0x00);
+  for (uint8_t index = 0; index < sizeof(crtc); index++) {
+    outb(0x3D4, index);
+    outb(0x3D5, crtc[index]);
+  }
+
+  for (uint8_t index = 0; index < sizeof(graphics_controller); index++) {
+    outb(0x3CE, index);
+    outb(0x3CF, graphics_controller[index]);
+  }
+
+  (void)inb(0x3DA);
+  for (uint8_t index = 0; index < sizeof(attribute_controller); index++) {
+    outb(0x3C0, index);
+    outb(0x3C0, attribute_controller[index]);
+  }
+  outb(0x3C0, 0x20);
 }
 
 // Print a horizontal line
@@ -279,9 +376,10 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
     }
     keyboard_get_key(); // Consume the key
     
-    // Clear for shell (fallback to text mode for now)
-    // For a real graphical shell, we'd need a lot more code!
   }
+
+  if (!graphics_is_available())
+    restore_vga_text_mode();
 
   // Color scheme for kernel messages
   uint8_t title_color = VGA_ENTRY_COLOR(VGA_COLOR_WHITE, VGA_COLOR_BLUE);

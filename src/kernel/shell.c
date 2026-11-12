@@ -150,15 +150,27 @@ static void print_hex_byte(uint8_t byte) {
 static void cmd_reboot(void) {
   knewline();
   kprint("Rebooting...", VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_RED, VGA_COLOR_BLACK));
+  __asm__ volatile("cli");
 
   // Pulse the CPU reset line using the keyboard controller
-  uint8_t good = 0x02;
-  while (good & 0x02)
-    good = inb(0x64);
+  for (uint32_t timeout = 100000; timeout > 0; timeout--) {
+    if ((inb(0x64) & 0x02) == 0)
+      break;
+  }
   outb(0x64, 0xFE);
 
+  // Fall back to the chipset reset register if the keyboard controller did
+  // not accept the reset command.
+  for (volatile uint32_t timeout = 0; timeout < 100000; timeout++)
+    __asm__ volatile("pause");
+  outb(0x92, (uint8_t)((inb(0x92) & ~0x02) | 0x01));
+
   // If that fails, try Triple Fault
-  __asm__ volatile("lidt (%0)" : : "r"((uint64_t)0));
+  struct {
+    uint16_t limit;
+    uint64_t base;
+  } __attribute__((packed)) empty_idt = {0, 0};
+  __asm__ volatile("lidt %0" : : "m"(empty_idt));
   __asm__ volatile("int3");
 
   // Halt if all else fails
@@ -467,7 +479,11 @@ void shell_handle_arrow(uint8_t scancode) {
 }
 
 // Initialize shell
-void shell_init(void) { input_pos = 0; }
+void shell_init(void) {
+  input_pos = 0;
+  for (int i = 0; i < INPUT_BUFFER_SIZE; i++)
+    input_buffer[i] = '\0';
+}
 
 // Run shell
 void shell_run(void) {

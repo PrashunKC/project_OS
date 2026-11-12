@@ -132,6 +132,7 @@ GDTEnd:
 
 ; GDT Descriptor - placed right after GDT
 GDTDesc:
+    global GDTDesc
     dw GDTEnd - GDTStart - 1        ; limit (size - 1)
     dd GDTStart                      ; linear address of GDT (linker provides 0x20xxx)
 
@@ -271,6 +272,15 @@ SetupVESA:
     jne .vesa_failed
 
 .mode_set_done:
+    ; Some BIOSes report a mode as successful but provide no linear
+    ; framebuffer address. Do not leave the display in an unusable VBE mode.
+    cmp dword [es:di + 40], 0
+    jne .save_mode_info
+    mov ax, 0x0003
+    int 0x10
+    jmp .vesa_failed
+
+.save_mode_info:
     ; Save mode info to a fixed low memory location for C code to read
     ; We'll use 0x8100 as a safe location (after FB_INFO at 0x8000)
     push ds

@@ -3,6 +3,8 @@ bits 32
 
 section .text
 
+extern GDTDesc
+
 global x86_Video_WriteCharTeletype
 global x86_Disk_Reset
 global x86_Disk_Read
@@ -348,6 +350,10 @@ x86_EnterProtectedMode:
     
     ; Save Stack Pointer to a known location (0x7C00 is free now)
     mov [0x7C00], sp
+
+    ; BIOS calls are allowed to change GDTR. Restore the stage2 GDT before
+    ; loading a protected-mode selector.
+    a32 lgdt [GDTDesc]
 
     mov eax, cr0
     or eax, 1

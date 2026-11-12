@@ -80,13 +80,19 @@ check_dependencies() {
     local missing_deps=()
     
     # Essential build tools
-    local required_tools=("gcc" "g++" "make" "bison" "flex" "gmp" "mpfr" "mpc" "makeinfo")
+    local required_tools=("gcc" "g++" "make" "bison" "flex" "gmp" "mpfr" "mpc" "makeinfo" "nasm" "mkfs.fat" "mcopy")
     
     for tool in "${required_tools[@]}"; do
         case "$tool" in
             gmp|mpfr)
-                # Check for development libraries
-                if ! pkg-config --exists "$tool" 2>/dev/null; then
+                # Prefer pkg-config, but fall back to a linker probe because
+                # Debian development packages may not provide .pc metadata.
+                if command_exists pkg-config; then
+                    if ! pkg-config --exists "$tool" 2>/dev/null; then
+                        missing_deps+=("lib${tool}-dev")
+                    fi
+                elif ! printf 'int main(void) { return 0; }\n' |
+                    gcc "-l${tool}" -x c - -o /dev/null 2>/dev/null; then
                     missing_deps+=("lib${tool}-dev")
                 fi
                 ;;
@@ -112,13 +118,13 @@ check_dependencies() {
         
         # Detect package manager and provide appropriate command
         if command_exists apt-get; then
-            echo "  sudo apt-get install build-essential bison flex libgmp3-dev libmpfr-dev libmpc-dev texinfo"
+            echo "  sudo apt-get install build-essential bison flex pkg-config libgmp-dev libmpfr-dev libmpc-dev texinfo nasm dosfstools mtools"
         elif command_exists dnf; then
-            echo "  sudo dnf install gcc gcc-c++ make bison flex gmp-devel mpfr-devel libmpc-devel texinfo"
+            echo "  sudo dnf install gcc gcc-c++ make bison flex gmp-devel mpfr-devel libmpc-devel texinfo nasm dosfstools mtools"
         elif command_exists pacman; then
-            echo "  sudo pacman -S base-devel gmp mpfr libmpc"
+            echo "  sudo pacman -S base-devel gmp mpfr libmpc nasm dosfstools mtools"
         elif command_exists zypper; then
-            echo "  sudo zypper install gcc gcc-c++ make bison flex gmp-devel mpfr-devel mpc-devel texinfo"
+            echo "  sudo zypper install gcc gcc-c++ make bison flex gmp-devel mpfr-devel mpc-devel texinfo nasm dosfstools mtools"
         else
             echo "  Install: build-essential, bison, flex, libgmp-dev, libmpfr-dev, libmpc-dev, texinfo"
         fi
