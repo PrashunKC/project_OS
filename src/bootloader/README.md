@@ -27,8 +27,9 @@ sector stays small while filesystem and hardware logic can live in C.
 | `memdefs.h` | Fixed low-memory regions shared by stage2 routines |
 
 Stage2 reads `kernel.bin` into a temporary buffer at `0x30000`, copies it to
-`0x100000`, writes framebuffer metadata at `0x8000`, and jumps to the kernel
-entry point. The kernel must continue to agree with the packed framebuffer
+`0x100000`, writes framebuffer metadata at `0x8000`, and jumps to the aligned
+kernel entry at `0x100020` (the 32-byte Multiboot header area precedes it).
+The kernel must continue to agree with the packed framebuffer
 layout in `vesa.h`.
 
 ## Building

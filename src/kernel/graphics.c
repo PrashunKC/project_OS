@@ -1,5 +1,6 @@
 // Framebuffer graphics primitives and the built-in 8x16 ASCII renderer.
 #include "graphics.h"
+#include "multiboot.h"
 
 // Address where bootloader stores framebuffer info
 #define FB_INFO_ADDR 0x8000
@@ -304,15 +305,32 @@ static const uint8_t font8x16[95][16] = {
 
 // Initialize graphics from bootloader info
 void graphics_init(void) {
-  // Read framebuffer info from known address
-  FramebufferInfo *src = (FramebufferInfo *)FB_INFO_ADDR;
+  FramebufferInfo handoff = *(FramebufferInfo *)FB_INFO_ADDR;
+  fb_info = (FramebufferInfo){0};
 
-  // Copy to local structure
-  fb_info = *src;
+  if (handoff.framebuffer_addr != 0 && handoff.width >= 320 &&
+      handoff.width <= 4096 && handoff.height >= 200 &&
+      handoff.height <= 2160 && (handoff.bpp == 24 || handoff.bpp == 32) &&
+      handoff.pitch >= handoff.width * (handoff.bpp / 8) &&
+      handoff.pitch <= handoff.width * 8) {
+    fb_info = handoff;
+  } else {
+    fb_info.framebuffer_addr = multiboot_get_framebuffer_addr();
+    fb_info.width = multiboot_get_framebuffer_width();
+    fb_info.height = multiboot_get_framebuffer_height();
+    fb_info.pitch = multiboot_get_framebuffer_pitch();
+    fb_info.bpp = multiboot_get_framebuffer_bpp();
+    fb_info.red_mask_size = 8;
+    fb_info.red_field_pos = 16;
+    fb_info.green_mask_size = 8;
+    fb_info.green_field_pos = 8;
+    fb_info.blue_mask_size = 8;
+    fb_info.blue_field_pos = 0;
+  }
 
-  // Check if we have a valid framebuffer
-  if (fb_info.framebuffer_addr != 0 && fb_info.width > 0 && fb_info.height > 0 &&
-      fb_info.bpp >= 24) {
+  if (fb_info.framebuffer_addr != 0 && fb_info.width >= 320 &&
+      fb_info.height >= 200 && (fb_info.bpp == 24 || fb_info.bpp == 32) &&
+      fb_info.pitch >= fb_info.width * (fb_info.bpp / 8)) {
     framebuffer = (volatile uint8_t *)(uintptr_t)fb_info.framebuffer_addr;
     graphics_available = 1;
   } else {

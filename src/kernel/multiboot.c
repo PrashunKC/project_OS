@@ -30,6 +30,20 @@ void multiboot_init(uint32_t magic, multiboot_info_t *mbi) {
     framebuffer_info.pitch = mbi->framebuffer_pitch;
     framebuffer_info.bpp = mbi->framebuffer_bpp;
     framebuffer_info.type = mbi->framebuffer_type;
+    return;
+  }
+
+  // Some BIOS GRUB builds expose VBE mode data without setting the
+  // Multiboot framebuffer flag. Reuse the VBE mode block whenever its
+  // pointer is present.
+  if (mbi->vbe_mode_info != 0) {
+    uint8_t *vbe = (uint8_t *)(uintptr_t)mbi->vbe_mode_info;
+    framebuffer_info.addr = *(uint32_t *)(vbe + 40);
+    framebuffer_info.pitch = *(uint16_t *)(vbe + 16);
+    framebuffer_info.width = *(uint16_t *)(vbe + 18);
+    framebuffer_info.height = *(uint16_t *)(vbe + 20);
+    framebuffer_info.bpp = vbe[25];
+    framebuffer_info.type = vbe[27];
   }
 }
 

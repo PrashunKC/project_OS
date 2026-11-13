@@ -59,6 +59,21 @@ The complete build normally needs:
 - QEMU for emulation
 - VirtualBox for the `run-vbox*` targets
 
+VirtualBox cannot share AMD-V/VT-x with an active KVM host. The VirtualBox
+targets attempt to unload inactive KVM modules automatically using `sudo`; if
+KVM is busy, use the QEMU targets or inspect `/dev/kvm` ownership first.
+The floppy `run-vbox` target deliberately disables VirtualBox hardware
+virtualization because this 16-bit-to-64-bit VESA boot path can triple-fault
+under VirtualBox's accelerated execution mode. The ISO and GRUB targets retain
+hardware virtualization.
+
+The `grub-iso` target creates a BIOS-bootable Multiboot ISO using the linked
+`kernel.elf` image and requires `grub-pc-bin` in addition to `grub-mkrescue`
+and `xorriso`. Its GRUB configuration intentionally keeps the boot menu in
+text mode for compatibility; the kernel consumes either the standard
+Multiboot framebuffer fields or the legacy VBE mode-information block when
+supplied by GRUB.
+
 Run the repository's toolchain check before installing anything:
 
 ```bash
@@ -85,12 +100,32 @@ Other useful targets are:
 
 ```bash
 make iso                # floppy image plus SDK on an ISO
-make iso_noemul         # no-emulation ISO using the VBR
+make iso_noemul         # ISO using the known-good floppy boot image
 make hdd_image          # 32 MiB FAT16 hard-disk image
 make grub-iso           # GRUB Multiboot ISO for kernel experiments
-make qemu-test          # boot kernel.bin directly with QEMU
+make qemu-test          # boot the custom floppy path with QEMU
 make qemu-grub          # boot the GRUB ISO with QEMU
+make test               # full non-interactive build/image/QEMU diagnostics
+make requirements       # list requirements by build/test target
 ```
+
+`./test.sh` (or `make test`) writes a timestamped report to
+`build/diagnostics/`. It records tool and virtualization state, builds the
+supported images, validates the FAT and Multiboot artifacts, observes floppy
+and GRUB boots with bounded QEMU runs, and captures monitor screenshots and
+QEMU diagnostic logs, including pre- and post-welcome terminal screenshots.
+It also validates the `qemu-test`, `iso_noemul`, and GRUB Make recipes and
+checks that the linked kernel entry address matches stage2's handoff offset.
+Raw output remains in `test.log`; interpreted suspicious evidence is copied
+to `warnings.txt`, proof-check failures to `errors.txt`, and the final counts
+to `summary.txt`. Warnings are visible but do not fail a run unless a proof
+check fails. Expected QEMU observation timeouts are reported separately from
+boot errors.
+Use `./test.sh --virtualbox` to collect VirtualBox host information, or
+`./test.sh --virtualbox-boot` to start the `run-vbox` target and fail if the
+VM fails to remain running, produces a VirtualBox fault signature, or cannot
+produce a screen capture. The latter stores the VM information, VirtualBox
+log, boot output, and screenshot, then powers off the test VM afterward.
 
 Build artifacts are written below `build/` and are intentionally not source
 inputs. `build.sh` runs a clean build and writes command output to

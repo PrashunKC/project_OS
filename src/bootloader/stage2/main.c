@@ -17,6 +17,7 @@
 
 // Fixed address where we store framebuffer info for kernel
 #define FB_INFO_ADDR 0x8000
+#define KERNEL_ENTRY_OFFSET 32
 
 // VESA info locations (set by assembly in real mode)
 #define VESA_AVAILABLE_ADDR 0x80FF
@@ -151,7 +152,7 @@ void _cdecl cstart_(uint16_t bootDrive) {
   static uint32_t multiboot_info[32] = {0};
 
   // Pass the values expected by the kernel's 32-bit entry stub.
-  uint32_t entryPoint = (uint32_t)kernelStart + 16;
+  uint32_t entryPoint = (uint32_t)kernelStart + KERNEL_ENTRY_OFFSET;
   __asm__ volatile("movl $0x2BADB002, %%eax\n" // Multiboot magic
                    "movl %0, %%ebx\n"          // Multiboot info
                    "jmp *%1\n"                 // Jump to kernel entry

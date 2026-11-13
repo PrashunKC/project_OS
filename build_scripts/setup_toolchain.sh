@@ -80,7 +80,7 @@ check_dependencies() {
     local missing_deps=()
     
     # Essential build tools
-    local required_tools=("gcc" "g++" "make" "bison" "flex" "gmp" "mpfr" "mpc" "makeinfo" "nasm" "mkfs.fat" "mcopy")
+    local required_tools=("gcc" "g++" "make" "bison" "flex" "gmp" "mpfr" "mpc" "makeinfo" "nasm" "mkfs.fat" "mcopy" "xorriso")
     
     for tool in "${required_tools[@]}"; do
         case "$tool" in
@@ -118,13 +118,13 @@ check_dependencies() {
         
         # Detect package manager and provide appropriate command
         if command_exists apt-get; then
-            echo "  sudo apt-get install build-essential bison flex pkg-config libgmp-dev libmpfr-dev libmpc-dev texinfo nasm dosfstools mtools"
+            echo "  sudo apt-get install build-essential bison flex pkg-config libgmp-dev libmpfr-dev libmpc-dev texinfo nasm dosfstools mtools xorriso grub-pc-bin"
         elif command_exists dnf; then
-            echo "  sudo dnf install gcc gcc-c++ make bison flex gmp-devel mpfr-devel libmpc-devel texinfo nasm dosfstools mtools"
+            echo "  sudo dnf install gcc gcc-c++ make bison flex gmp-devel mpfr-devel libmpc-devel texinfo nasm dosfstools mtools xorriso grub2-tools-extra"
         elif command_exists pacman; then
-            echo "  sudo pacman -S base-devel gmp mpfr libmpc nasm dosfstools mtools"
+            echo "  sudo pacman -S base-devel gmp mpfr libmpc nasm dosfstools mtools xorriso grub"
         elif command_exists zypper; then
-            echo "  sudo zypper install gcc gcc-c++ make bison flex gmp-devel mpfr-devel mpc-devel texinfo nasm dosfstools mtools"
+            echo "  sudo zypper install gcc gcc-c++ make bison flex gmp-devel mpfr-devel mpc-devel texinfo nasm dosfstools mtools xorriso grub2"
         else
             echo "  Install: build-essential, bison, flex, libgmp-dev, libmpfr-dev, libmpc-dev, texinfo"
         fi

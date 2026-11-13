@@ -4,6 +4,7 @@
 # Toolchain configuration
 TOOLCHAIN_DIR ?= $(HOME)/opt/cross
 TARGET_PREFIX ?= i686-elf
+TOOLCHAIN_SETUP_SCRIPT ?= $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/setup_toolchain.sh)
 
 # Toolchain binaries
 export PATH := $(TOOLCHAIN_DIR)/bin:$(PATH)

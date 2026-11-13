@@ -9,8 +9,23 @@ sets up the initial execution state and calls `start64` in `main.c`.
 loads the interrupt descriptor table, registers exception/IRQ stubs, remaps
 the 8259 PIC, enables interrupts, and registers the PS/2 keyboard handler.
 The graphical welcome screen is shown when stage2 supplies a valid framebuffer.
-After a keypress, the shell uses that framebuffer when VGA mode cannot be
-restored; otherwise it uses the VGA text console.
+The console backend is selected in this order:
+
+1. A validated framebuffer uses the graphical terminal with the built-in 8x16
+   renderer. The welcome screen transitions into a persistent desktop-style
+   terminal window; shell scrolling is clipped to that window.
+2. If no framebuffer is available, a detected VGA adapter uses the color
+   80x25 text terminal.
+3. If VGA is unavailable, the kernel uses a monochrome serial terminal on
+   COM1 (115200/8N1) without touching VGA memory.
+
+After a keypress, the shell continues on the selected backend. Color
+attributes are ignored by the monochrome fallback.
+
+The Multiboot entry also requests a 640x480x32 VBE mode and accepts the
+legacy Multiboot VBE mode-information block when GRUB provides one. This
+keeps the framebuffer path usable across GRUB BIOS implementations that do
+not set the newer framebuffer flag consistently.
 Keyboard and shell state are explicitly reset on warm boots so stale
 scancodes cannot skip the welcome screen or contaminate the first command.
 

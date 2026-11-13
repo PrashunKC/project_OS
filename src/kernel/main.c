@@ -7,11 +7,14 @@
 #include "paging.h"
 #include "shell.h"
 #include "stdint.h"
+#include "vga.h"
 
 // VGA text mode constants
 #define VGA_WIDTH 80
 #define VGA_HEIGHT 25
 #define VGA_MEMORY 0xB8000
+#define TERMINAL_FONT_WIDTH 8
+#define TERMINAL_FONT_HEIGHT 16
 
 // VGA color attributes
 #define VGA_COLOR_BLACK 0x0
@@ -39,18 +42,34 @@ static int cursor_row = 0;
 static int cursor_col = 0;
 static volatile uint8_t *video_memory = (volatile uint8_t *)VGA_MEMORY;
 
+typedef enum {
+  CONSOLE_FRAMEBUFFER,
+  CONSOLE_VGA_COLOR,
+  CONSOLE_MONOCHROME
+} ConsoleBackend;
+
+static ConsoleBackend console_backend = CONSOLE_VGA_COLOR;
+static int terminal_x = 0;
+static int terminal_y = 0;
+static int terminal_width = VGA_WIDTH;
+static int terminal_height = VGA_HEIGHT;
+
+#define SERIAL_COM1 0x3F8
+
 static int console_width(void) {
-  if (graphics_is_available()) {
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
     FramebufferInfo *fb = graphics_get_info();
-    return fb->width / 8;
+    (void)fb;
+    return terminal_width;
   }
   return VGA_WIDTH;
 }
 
 static int console_height(void) {
-  if (graphics_is_available()) {
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
     FramebufferInfo *fb = graphics_get_info();
-    return fb->height / 16;
+    (void)fb;
+    return terminal_height;
   }
   return VGA_HEIGHT;
 }
@@ -70,9 +89,67 @@ static inline uint8_t inb(uint16_t port) {
   return value;
 }
 
+static void serial_init(void) {
+  outb(SERIAL_COM1 + 1, 0x00);
+  outb(SERIAL_COM1 + 3, 0x80);
+  outb(SERIAL_COM1 + 0, 0x03);
+  outb(SERIAL_COM1 + 1, 0x00);
+  outb(SERIAL_COM1 + 3, 0x03);
+  outb(SERIAL_COM1 + 2, 0xC7);
+  outb(SERIAL_COM1 + 4, 0x0B);
+}
+
+static void serial_putc(char c) {
+  for (uint32_t timeout = 100000; timeout > 0; timeout--) {
+    if (inb(SERIAL_COM1 + 5) & 0x20)
+      break;
+    __asm__ volatile("pause");
+  }
+
+  outb(SERIAL_COM1, (uint8_t)c);
+}
+
+
+static void graphics_terminal_init(void) {
+  FramebufferInfo *fb = graphics_get_info();
+  int window_x = 24;
+  int window_y = 24;
+  int window_w = (int)fb->width - 48;
+  int window_h = (int)fb->height - 48;
+
+  if (window_w < 160)
+    window_w = (int)fb->width;
+  if (window_h < 80)
+    window_h = (int)fb->height;
+  if (window_w == (int)fb->width)
+    window_x = 0;
+  if (window_h == (int)fb->height)
+    window_y = 0;
+
+  graphics_clear(COLOR_DESKTOP_BG);
+  graphics_fill_rect(window_x + 4, window_y + 4, window_w, window_h,
+                     COLOR_DARK_GRAY);
+  graphics_fill_rect(window_x, window_y, window_w, window_h,
+                     COLOR_BLACK);
+  graphics_fill_rect(window_x, window_y, window_w, 24, COLOR_TITLE_BAR);
+  graphics_draw_string(window_x + 10, window_y + 4, "NBOS Terminal",
+                       COLOR_WHITE, COLOR_TITLE_BAR);
+  graphics_draw_rect(window_x, window_y, window_w, window_h, COLOR_LIGHT_GRAY);
+
+  terminal_x = window_x + 12;
+  terminal_y = window_y + 34;
+  terminal_width = (window_w - 24) / TERMINAL_FONT_WIDTH;
+  terminal_height = (window_h - 46) / TERMINAL_FONT_HEIGHT;
+  if (terminal_width < 1)
+    terminal_width = 1;
+  if (terminal_height < 1)
+    terminal_height = 1;
+}
+
 // Update hardware cursor position
 void update_cursor(void) {
-  if (graphics_is_available())
+  if (console_backend == CONSOLE_FRAMEBUFFER ||
+      console_backend == CONSOLE_MONOCHROME)
     return;
 
   uint16_t pos = cursor_row * VGA_WIDTH + cursor_col;
@@ -94,22 +171,28 @@ void set_cursor_col(int col) {
 
 // Scroll the screen content up by one line
 void scroll_screen(void) {
-  if (graphics_is_available()) {
-    FramebufferInfo *fb = graphics_get_info();
-    for (uint32_t y = 16; y < fb->height; y++) {
-      for (uint32_t x = 0; x < fb->width; x++) {
-        graphics_put_pixel((int)x, (int)(y - 16),
-                           graphics_get_pixel((int)x, (int)y));
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
+    int content_width = terminal_width * TERMINAL_FONT_WIDTH;
+    int content_height = terminal_height * TERMINAL_FONT_HEIGHT;
+    for (int y = TERMINAL_FONT_HEIGHT; y < content_height; y++) {
+      for (int x = 0; x < content_width; x++) {
+        graphics_put_pixel(terminal_x + x, terminal_y + y - TERMINAL_FONT_HEIGHT,
+                           graphics_get_pixel(terminal_x + x,
+                                              terminal_y + y));
       }
     }
-    for (uint32_t y = fb->height - 16; y < fb->height; y++) {
-      for (uint32_t x = 0; x < fb->width; x++)
-        graphics_put_pixel((int)x, (int)y, COLOR_BLACK);
+    for (int y = content_height - TERMINAL_FONT_HEIGHT; y < content_height;
+         y++) {
+      for (int x = 0; x < content_width; x++)
+        graphics_put_pixel(terminal_x + x, terminal_y + y, COLOR_BLACK);
     }
     cursor_row = console_height() - 1;
     cursor_col = 0;
     return;
   }
+
+  if (console_backend == CONSOLE_MONOCHROME)
+    return;
 
   // Copy all lines up by one
   for (int row = 1; row < VGA_HEIGHT; row++) {
@@ -131,9 +214,16 @@ void scroll_screen(void) {
 
 // Clear the screen with specified color
 void clear_screen(uint8_t color) {
-  if (graphics_is_available()) {
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
     (void)color;
-    graphics_clear(COLOR_BLACK);
+    graphics_terminal_init();
+    cursor_row = 0;
+    cursor_col = 0;
+    return;
+  }
+
+  if (console_backend == CONSOLE_MONOCHROME) {
+    serial_putc('\f');
     cursor_row = 0;
     cursor_col = 0;
     return;
@@ -149,9 +239,16 @@ void clear_screen(uint8_t color) {
 
 // Print a character at current cursor position
 void putchar_at(char c, uint8_t color, int col, int row) {
-  if (graphics_is_available()) {
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
     (void)color;
-    graphics_draw_char(col * 8, row * 16, c, COLOR_WHITE, COLOR_BLACK);
+    graphics_draw_char(terminal_x + col * TERMINAL_FONT_WIDTH,
+                       terminal_y + row * TERMINAL_FONT_HEIGHT, c, COLOR_WHITE,
+                       COLOR_BLACK);
+    return;
+  }
+
+  if (console_backend == CONSOLE_MONOCHROME) {
+    serial_putc(c);
     return;
   }
 
@@ -162,6 +259,11 @@ void putchar_at(char c, uint8_t color, int col, int row) {
 
 // Print a character and advance cursor
 void kputc(char c, uint8_t color) {
+  if (console_backend == CONSOLE_MONOCHROME &&
+      (c == '\n' || c == '\r' || c == '\b')) {
+    serial_putc(c);
+  }
+
   if (c == '\n') {
     cursor_col = 0;
     cursor_row++;
@@ -269,11 +371,19 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
     // The custom bootloader passes 0x2BADB002 in EDI
   }
 
-  // Initialize graphics system first
-  graphics_init();
-
   // Initialize Multiboot (parse framebuffer info from GRUB)
   multiboot_init((uint32_t)magic, mbi);
+
+  // Initialize graphics from the custom handoff or parsed Multiboot data.
+  graphics_init();
+  serial_init();
+  if (graphics_is_available()) {
+    console_backend = CONSOLE_FRAMEBUFFER;
+  } else if (vga_is_available()) {
+    console_backend = CONSOLE_VGA_COLOR;
+  } else {
+    console_backend = CONSOLE_MONOCHROME;
+  }
 
   // Initialize IDT and ISRs
   idt_init();
@@ -289,7 +399,7 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
   keyboard_init();
 
   // Check if we're in graphics mode
-  if (graphics_is_available()) {
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
     // Graphical boot screen!
     FramebufferInfo *fb = graphics_get_info();
     
@@ -378,7 +488,7 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
     
   }
 
-  if (!graphics_is_available())
+  if (console_backend == CONSOLE_VGA_COLOR)
     restore_vga_text_mode();
 
   // Color scheme for kernel messages
@@ -388,7 +498,7 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
   uint8_t header_color = VGA_ENTRY_COLOR(VGA_COLOR_YELLOW, VGA_COLOR_BLACK);
   uint8_t detail_color = VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK);
 
-  // Clear screen with black background
+  // Initialize the selected terminal backend.
   clear_screen(VGA_ENTRY_COLOR(VGA_COLOR_LIGHT_GRAY, VGA_COLOR_BLACK));
 
   // Print kernel header
@@ -403,9 +513,21 @@ void start64(uint64_t magic, uint64_t mbi_addr) {
   // Print system information
   kprint("[INFO] Kernel loaded and running in 64-bit Long Mode", info_color);
   knewline();
-  kprint("[INFO] VGA text mode initialized (80x25)", info_color);
+  if (console_backend == CONSOLE_FRAMEBUFFER) {
+    kprint("[INFO] Graphical framebuffer terminal active", info_color);
+  } else if (console_backend == CONSOLE_VGA_COLOR) {
+    kprint("[INFO] VGA color text terminal active (80x25)", info_color);
+  } else {
+    kprint("[INFO] Monochrome serial terminal fallback active", info_color);
+  }
   knewline();
-  kprint("[INFO] Video memory at 0xB8000", info_color);
+  if (console_backend == CONSOLE_VGA_COLOR) {
+    kprint("[INFO] Video memory at 0xB8000", info_color);
+  } else if (console_backend == CONSOLE_FRAMEBUFFER) {
+    kprint("[INFO] Framebuffer text renderer active", info_color);
+  } else {
+    kprint("[INFO] COM1 serial output at 115200 baud", info_color);
+  }
   knewline();
   knewline();
 

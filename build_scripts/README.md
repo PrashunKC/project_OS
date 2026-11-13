@@ -15,8 +15,9 @@ material. The repository's actual build graph is defined by the root
   should be reviewed before running with elevated privileges.
   Debian systems should have `pkg-config` installed; the script also falls
   back to linker probes when package metadata is unavailable.
-  Its prerequisite check also covers NASM, `mkfs.fat`, and `mcopy`, which are
-  required by the default floppy-image build.
+  Its prerequisite check also covers NASM, `mkfs.fat`, `mcopy`, and `xorriso`,
+  which are required by the image targets. GRUB rescue tools are included in
+  the suggested package commands for `grub-iso`.
 - `QUICK_REFERENCE.md`, `SUMMARY.md`, and `USAGE_EXAMPLES.md` are command
   references for the current targets and should be read alongside the root
   Makefile.
@@ -24,6 +25,7 @@ material. The repository's actual build graph is defined by the root
 ## Common commands
 
 ```bash
+make requirements
 make check-toolchain
 make toolchain-info
 ./build_scripts/check_toolchain.sh

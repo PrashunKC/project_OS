@@ -10,7 +10,7 @@ Run commands from the repository root.
 | `make kernel` | Build `build/kernel.bin` |
 | `make floppy_image` | Build `build/main_floppy.img` |
 | `make iso` | Build a bootable ISO containing the floppy image and SDK |
-| `make iso_noemul` | Build a no-emulation ISO |
+| `make iso_noemul` | Build an ISO using the known-good floppy boot image |
 | `make hdd_image` | Build a 32 MiB FAT16 hard-disk image |
 | `make grub-iso` | Build the GRUB/Multiboot kernel ISO |
 | `make tools_fat` | Build `build/tools/fat` |
