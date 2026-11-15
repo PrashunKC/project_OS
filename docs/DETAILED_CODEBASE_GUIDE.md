@@ -853,4 +853,3 @@ and rationale that gives each range meaning.
    fallback order changes.
 7. Do not call a target “universal” unless its firmware, emulator, and
    metadata assumptions are documented and tested.
-
