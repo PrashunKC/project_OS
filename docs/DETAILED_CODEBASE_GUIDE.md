@@ -89,7 +89,7 @@ device at all.
 
 ### 3.1 Root `Makefile`
 
-The root [Makefile](/home/debian/Documents/GITHUB/MY_REPO/project_OS/Makefile)
+The root [Makefile](/project_OS/Makefile)
 is the reproducible graph from source to boot media.
 
 | Lines | Responsibility and reason |
