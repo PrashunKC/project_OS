@@ -43,6 +43,7 @@ Component documentation:
 
 - [`src/bootloader/README.md`](src/bootloader/README.md)
 - [`src/kernel/README.md`](src/kernel/README.md)
+- [`docs/DETAILED_CODEBASE_GUIDE.md`](docs/DETAILED_CODEBASE_GUIDE.md)
 - [`sdk/README.md`](sdk/README.md)
 - [`tools/fat/README.md`](tools/fat/README.md)
 - [`build_scripts/README.md`](build_scripts/README.md)
